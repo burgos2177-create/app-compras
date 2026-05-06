@@ -4,7 +4,8 @@ import { state, setState } from '../state/store.js';
 import {
   getObraMetaLegacy, getBuzonItem, updateBuzonItem,
   getRequisicionMateriales,
-  loadCatalogoConceptos, loadCatalogoMateriales
+  loadCatalogoConceptos, loadCatalogoMateriales,
+  listOC, calcularCoberturaReq
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num, num0, reqFolio } from '../util/format.js';
@@ -28,11 +29,12 @@ export async function renderInboxDetalle({ params }) {
   setState({ obraActual: obraId });
   renderShell(crumbsView(obraId, '...', '...'), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const [meta, buzonItem, catCon, catMat] = await Promise.all([
+  const [meta, buzonItem, catCon, catMat, ocs] = await Promise.all([
     getObraMetaLegacy(obraId),
     getBuzonItem(buzonId),
     loadCatalogoConceptos(obraId),
-    loadCatalogoMateriales(obraId)
+    loadCatalogoMateriales(obraId),
+    listOC(obraId)
   ]);
   setState({ conceptos: catCon?.conceptos || null, materiales: catMat?.items || null });
 
@@ -74,11 +76,49 @@ export async function renderInboxDetalle({ params }) {
   ]);
 
   const items = buzonItem.items || {};
-  const itemsCard = renderItemsCard(items, materiales, conceptos);
+  const cobertura = calcularCoberturaReq({ ...buzonItem, id: buzonId }, ocs);
+  const coberturaCard = cobertura.totalPedido > 0
+    ? renderCoberturaCard(cobertura, materiales, ocs, buzonId, obraId)
+    : null;
+  const itemsCard = renderItemsCard(items, materiales, conceptos, cobertura);
 
   renderShell(crumbsView(obraId, meta?.nombre, folio), h('div', {}, [
-    head, metaCard, itemsCard
+    head, metaCard, coberturaCard, itemsCard
   ]));
+}
+
+function renderCoberturaCard(cobertura, materiales, ocs, buzonId, obraId) {
+  const pct = Math.round(cobertura.pct * 100);
+  const color = pct >= 100 ? 'var(--ok)' : pct > 0 ? 'var(--warn)' : 'var(--text-2)';
+  const label = pct >= 100 ? '✓ Completamente cubierta' : pct > 0 ? '⚠ Parcialmente cubierta' : 'Sin cubrir';
+
+  // OCs vinculadas a esta req
+  const ocsLink = Object.entries(ocs)
+    .filter(([, oc]) => (oc.reqIds || []).includes(buzonId))
+    .sort((a, b) => (a[1].numero || 0) - (b[1].numero || 0));
+
+  return h('div', { class: 'card' }, [
+    h('h3', {}, 'Cobertura por OC'),
+    h('div', { class: 'row', style: { gap: '12px', alignItems: 'center', marginBottom: '10px' } }, [
+      h('div', { style: { fontSize: '22px', fontWeight: '600', color, fontFamily: 'var(--mono)', minWidth: '70px' } }, `${pct}%`),
+      h('div', { style: { flex: 1, height: '10px', background: 'var(--bg-3)', borderRadius: '5px', overflow: 'hidden' } },
+        h('div', { style: { height: '100%', width: `${Math.min(pct, 100)}%`, background: color, transition: 'width .3s' } })),
+      h('div', { class: 'muted', style: { fontSize: '12px' } }, label)
+    ]),
+    h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '8px' } },
+      `${num(cobertura.totalCubierto)} de ${num(cobertura.totalPedido)} unidades comprometidas en OC.`),
+    ocsLink.length > 0 && h('div', {}, [
+      h('div', { style: { fontSize: '12px', marginBottom: '6px', color: 'var(--text-1)' } },
+        `${ocsLink.length} OC vinculada${ocsLink.length === 1 ? '' : 's'}:`),
+      h('ul', { style: { margin: '0', paddingLeft: '20px', fontSize: '13px' } },
+        ocsLink.map(([id, oc]) => h('li', {}, [
+          h('a', { href: `#/obras/${obraId}/oc/${id}` },
+            `OC-${String(oc.numero || 0).padStart(4, '0')}`),
+          h('span', { class: 'muted' }, ` · ${oc.proveedor?.nombre || '—'} · ${num(Object.keys(oc.items || {}).length)} item(s) · `),
+          h('span', { class: 'tag muted', style: { fontSize: '10px' } }, oc.estado || '—')
+        ])))
+    ])
+  ]);
 }
 
 function renderActions(obraId, buzonId, item) {
@@ -128,7 +168,7 @@ function renderActions(obraId, buzonId, item) {
   return acts;
 }
 
-function renderItemsCard(items, materiales, conceptos) {
+function renderItemsCard(items, materiales, conceptos, cobertura) {
   const entries = Object.entries(items);
   if (entries.length === 0) {
     return h('div', { class: 'card' }, [
@@ -146,16 +186,18 @@ function renderItemsCard(items, materiales, conceptos) {
       h('thead', {}, [h('tr', {}, [
         h('th', {}, 'Material'),
         h('th', {}, 'Unidad'),
-        h('th', { class: 'num' }, 'Cantidad'),
+        h('th', { class: 'num' }, 'Pedido'),
+        h('th', { class: 'num' }, 'Cubierto'),
+        h('th', { class: 'num' }, 'Restante'),
         h('th', {}, 'Concepto destino'),
         h('th', {}, 'Notas')
       ])]),
-      h('tbody', {}, entries.map(([itemId, it]) => itemRow(it, materiales, conceptos)))
+      h('tbody', {}, entries.map(([itemId, it]) => itemRow(it, materiales, conceptos, cobertura)))
     ])
   ]);
 }
 
-function itemRow(it, materiales, conceptos) {
+function itemRow(it, materiales, conceptos, cobertura) {
   const m = materiales[it.materialKey];
   const matLabel = m
     ? h('div', {}, [
@@ -178,10 +220,23 @@ function itemRow(it, materiales, conceptos) {
       : h('span', { class: 'tag warn' }, '⚠ Concepto eliminado'))
     : h('span', { class: 'muted', style: { fontSize: '12px' } }, '—');
 
+  const cov = cobertura?.byMaterial?.[it.materialKey];
+  const pedido = Number(it.cantidad) || 0;
+  const cubierto = cov ? Math.min(cov.cubierto, cov.pedido) : 0;
+  // El cubierto está agregado por materialKey (la req puede tener varios items
+  // del mismo material); para el reporte por fila prorrateamos por share.
+  const share = cov && cov.pedido > 0 ? pedido / cov.pedido : 1;
+  const cubiertoFila = Math.min(pedido, cubierto * share);
+  const restanteFila = Math.max(0, pedido - cubiertoFila);
+  const cubiertoColor = restanteFila === 0 ? 'var(--ok)' : (cubiertoFila > 0 ? 'var(--warn)' : 'var(--text-2)');
+
   return h('tr', {}, [
     h('td', { style: { maxWidth: '380px' } }, matLabel),
     h('td', {}, m?.unidad || ''),
-    h('td', { class: 'num' }, num(it.cantidad, 2)),
+    h('td', { class: 'num' }, num(pedido, 2)),
+    h('td', { class: 'num', style: { color: cubiertoColor } }, num(cubiertoFila, 2)),
+    h('td', { class: 'num', style: { color: restanteFila === 0 ? 'var(--ok)' : 'var(--text-0)' } },
+      restanteFila === 0 ? '✓' : num(restanteFila, 2)),
     h('td', {}, conceptoLabel),
     h('td', { class: 'muted', style: { fontSize: '12px' } }, it.notas || '')
   ]);

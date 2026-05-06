@@ -251,6 +251,71 @@ export async function deleteCotizacion(obraId, cotId) {
   return rremove(`obras/${obraId}/cotizaciones/${cotId}`);
 }
 
+// === Cobertura de requisición ===
+//
+// Una requisición se puede satisfacer con varias cotizaciones/OC (de uno o
+// varios proveedores). Esta función calcula, para una req del buzón, cuánta
+// cantidad de cada material ya está comprometida en OCs activas y cuánto
+// queda por cubrir.
+//
+// OCs "activas" = todas excepto canceladas/rechazadas. Las pagadas, aprobadas
+// y enviada_buzon SÍ comprometen cantidad (ya la cubren).
+
+const OC_ESTADOS_NO_ACTIVOS = new Set(['cancelada', 'rechazada']);
+
+export function calcularCoberturaReq(reqBuzonItem, ocs) {
+  const reqItems = reqBuzonItem?.items || {};
+  const reqId = reqBuzonItem?.reqId || null;
+  const reqBuzonId = reqBuzonItem?.id || null;
+
+  // Pedido por materialKey (suma cantidades porque la req puede tener
+  // 2 líneas del mismo material a distintos conceptos)
+  const pedido = {};
+  for (const it of Object.values(reqItems)) {
+    if (!it.materialKey) continue;
+    pedido[it.materialKey] = (pedido[it.materialKey] || 0) + (Number(it.cantidad) || 0);
+  }
+
+  // Cubierto por OC activas que cubren esta req
+  const cubierto = {};
+  for (const oc of Object.values(ocs || {})) {
+    if (!oc) continue;
+    if (OC_ESTADOS_NO_ACTIVOS.has(oc.estado)) continue;
+    const cubreEstaReq = (oc.reqIds || []).some(rid =>
+      rid === reqBuzonId || rid === reqId
+    );
+    if (!cubreEstaReq) continue;
+    for (const it of Object.values(oc.items || {})) {
+      if (!it.materialKey) continue;
+      cubierto[it.materialKey] = (cubierto[it.materialKey] || 0) + (Number(it.cantidad) || 0);
+    }
+  }
+
+  const byMaterial = {};
+  let totalPedido = 0, totalCubierto = 0;
+  for (const [mk, ped] of Object.entries(pedido)) {
+    const cub = cubierto[mk] || 0;
+    const cap = Math.min(cub, ped);  // No "sobrecubre" en el cálculo de %
+    byMaterial[mk] = {
+      pedido: ped,
+      cubierto: cub,
+      cubiertoCap: cap,
+      restante: Math.max(0, ped - cub),
+      pct: ped > 0 ? cap / ped : 0
+    };
+    totalPedido += ped;
+    totalCubierto += cap;
+  }
+
+  return {
+    byMaterial,
+    pct: totalPedido > 0 ? totalCubierto / totalPedido : 0,
+    totalPedido,
+    totalCubierto,
+    completa: totalPedido > 0 && totalCubierto >= totalPedido
+  };
+}
+
 // === Órdenes de compra (esta app es escritor único) ===
 //
 // Modelo:

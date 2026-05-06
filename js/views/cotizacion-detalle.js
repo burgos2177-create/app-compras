@@ -7,39 +7,50 @@ import {
   listProveedoresGlobal,
   getBuzonItem, updateBuzonItem,
   getCotizacion, createCotizacion, updateCotizacion, listCotizaciones,
-  createOC, updateOC,
-  pushBuzonItem, setRequisicionOcRef
+  createOC, updateOC, listOC,
+  pushBuzonItem, setRequisicionOcRef,
+  calcularCoberturaReq
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
-import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js';
+import { dateMx, num, num0, money, reqFolio } from '../util/format.js';
 import { deriveTotales } from '../services/totales.js';
 import { estadoCotBadge } from './cotizaciones.js';
 
-// Captura/edita una cotización contra una requisición aprobada y desde aquí
-// se emite la OC. Reutilizada para `nueva` y `cotid` rutas — distinguimos por
-// presencia de cotId en params.
+// Captura/edita una cotización contra una requisición aprobada y emite la OC.
+//
+// Importante (decisión 2026-05-06): una req se puede satisfacer parcialmente
+// con varias cotizaciones/OC. Al sembrar items para una nueva cotización,
+// usamos la cantidad RESTANTE (cantidad pedida menos lo ya cubierto en OCs
+// emitidas anteriores). La req solo se marca como `cerrado` cuando la
+// cobertura llega a 100%.
+//
+// Sobre el foco de inputs: NO hacemos `repaint()` completo en cada keystroke
+// (eso destruye los inputs y pierde foco). Mutamos cot.items en memoria,
+// y solo refrescamos los nodos calculados (celda Importe + card Totales)
+// vía referencias guardadas en el cierre.
 
 export async function renderCotizacionDetalle({ params, query }) {
   const obraId = params.id;
-  const cotId = params.cotid || null;          // null = captura nueva
-  const reqBuzonId = query?.req || null;        // solo en modo nueva
+  const cotId = params.cotid || null;
+  const reqBuzonId = query?.req || null;
   setState({ obraActual: obraId });
   renderShell(crumbsView(obraId, '...', cotId), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const [meta, catCon, catMat, proveedores, existing, reqItem] = await Promise.all([
+  const [meta, catCon, catMat, proveedores, existing, reqItem, ocs] = await Promise.all([
     getObraMetaLegacy(obraId),
     loadCatalogoConceptos(obraId),
     loadCatalogoMateriales(obraId),
     listProveedoresGlobal(),
     cotId ? getCotizacion(obraId, cotId) : null,
-    reqBuzonId ? getBuzonItem(reqBuzonId) : null
+    reqBuzonId ? getBuzonItem(reqBuzonId) : null,
+    listOC(obraId)
   ]);
 
   setState({ conceptos: catCon?.conceptos || null, materiales: catMat?.items || null });
 
-  // Hidratamos la fuente de items: si es nueva, los traemos de la requisición;
-  // si es edición, ya están en la cotización.
   let cot = existing;
+  let cobertura = null;
+
   if (!cot) {
     if (!reqItem) {
       renderShell(crumbsView(obraId, meta?.nombre, null),
@@ -55,17 +66,23 @@ export async function renderCotizacionDetalle({ params, query }) {
         ]));
       return;
     }
-    // Sembrar items desde la requisición. Conserva conceptoKey y materialKey.
+
+    cobertura = calcularCoberturaReq({ ...reqItem, id: reqBuzonId }, ocs);
+
     const seedItems = {};
     for (const [reqItemId, it] of Object.entries(reqItem.items || {})) {
+      const cov = cobertura.byMaterial[it.materialKey];
+      // Si ya está totalmente cubierto en otras OC, no sembrar.
+      const restante = cov ? cov.restante : (Number(it.cantidad) || 0);
+      if (restante <= 0) continue;
       const m = (catMat?.items || {})[it.materialKey];
       seedItems[reqItemId] = {
         materialKey: it.materialKey,
         clave: m?.clave || '',
         descripcion: m?.descripcion || '',
         unidad: m?.unidad || '',
-        cantidad: Number(it.cantidad) || 0,
-        costoUnitario: Number(m?.costoUnitario) || 0,    // pre-llena con OPUS si existe
+        cantidad: restante,
+        costoUnitario: Number(m?.costoUnitario) || 0,
         conceptoKey: it.conceptoKey || null,
         origen: m?.origen || 'opus',
         notas: it.notas || ''
@@ -84,10 +101,17 @@ export async function renderCotizacionDetalle({ params, query }) {
       comentarios: '',
       estado: 'borrador'
     };
+  } else {
+    // Edición: cobertura informativa basada en la primera req vinculada.
+    const firstReqId = (cot.reqIds || [])[0];
+    if (firstReqId) {
+      const reqIt = await getBuzonItem(firstReqId);
+      if (reqIt) cobertura = calcularCoberturaReq({ ...reqIt, id: firstReqId }, ocs);
+    }
   }
 
   renderEditor({
-    obraId, cotId, cot, meta,
+    obraId, cotId, cot, meta, cobertura,
     materiales: catMat?.items || {},
     conceptos: catCon?.conceptos || {},
     proveedores
@@ -95,9 +119,13 @@ export async function renderCotizacionDetalle({ params, query }) {
 }
 
 function renderEditor(ctx) {
-  const { obraId, cotId, cot, meta, materiales, conceptos, proveedores } = ctx;
+  const { obraId, cotId, cot, meta, cobertura, materiales, conceptos, proveedores } = ctx;
 
-  // ====== Refs editables (mutamos `cot` en memoria; al guardar se persiste) ======
+  // === Refs DOM que se actualizan vía soft-recompute ===
+  const importeCellRefs = {};   // itemId → <td> de la columna Importe
+  const totalesCardRef = { node: null };  // se llena al renderizar
+
+  // === Datos card ===
   const provSelect = h('select', {},
     [h('option', { value: '' }, '— elige proveedor —')]
       .concat([...proveedores].sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '')).map(p =>
@@ -107,48 +135,86 @@ function renderEditor(ctx) {
     const p = proveedores.find(x => x.id === provSelect.value);
     if (p) {
       cot.proveedor = { id: p.id, nombre: p.nombre, rfc: p.rfc || '', telefono: p.telefono || '', email: p.email || '', contacto: '' };
+      provNombre.value = p.nombre;
     } else {
-      cot.proveedor = { id: null, nombre: '', rfc: '', telefono: '', email: '', contacto: '' };
+      cot.proveedor = { id: null, nombre: provNombre.value || '', rfc: '', telefono: '', email: '', contacto: '' };
     }
-    repaint();
   });
-
   const provNombre = h('input', { value: cot.proveedor?.nombre || '', placeholder: '(o escribe un nombre nuevo)' });
   provNombre.addEventListener('input', () => {
     cot.proveedor = { ...(cot.proveedor || {}), nombre: provNombre.value, id: null };
+    provSelect.value = '';
   });
 
   const fechaInput = h('input', { type: 'date', value: dateForInput(cot.fechaCotizacion) });
   fechaInput.addEventListener('change', () => {
     cot.fechaCotizacion = fromInputDateLocal(fechaInput.value) || cot.fechaCotizacion;
   });
-
   const vigenciaInput = h('input', { type: 'number', min: '0', max: '365', value: String(cot.vigenciaDias || 0) });
-  vigenciaInput.addEventListener('input', () => {
-    cot.vigenciaDias = Number(vigenciaInput.value) || 0;
-  });
-
+  vigenciaInput.addEventListener('input', () => { cot.vigenciaDias = Number(vigenciaInput.value) || 0; });
   const condInput = h('input', { value: cot.condicionesPago || '' });
   condInput.addEventListener('input', () => { cot.condicionesPago = condInput.value; });
 
   const ivaToggle = h('input', { type: 'checkbox', checked: !!cot.incluyeIva });
   ivaToggle.addEventListener('change', () => {
     cot.incluyeIva = ivaToggle.checked;
-    repaint();
+    softRecomputeTotales();
   });
   const ivaPctInput = h('input', { type: 'number', step: '0.01', min: '0', max: '0.5', value: String(cot.ivaPct ?? 0.16) });
   ivaPctInput.addEventListener('input', () => {
     const v = Number(ivaPctInput.value);
-    if (Number.isFinite(v)) { cot.ivaPct = v; repaint(); }
+    if (Number.isFinite(v)) { cot.ivaPct = v; softRecomputeTotales(); }
   });
-
   const comentariosArea = h('textarea', { rows: 2, placeholder: 'Comentarios internos / del proveedor' }, cot.comentarios || '');
   comentariosArea.addEventListener('input', () => { cot.comentarios = comentariosArea.value; });
 
-  // ====== Render ======
   const editable = !cot.estado || ['borrador', 'recibida'].includes(cot.estado);
   const readonly = !editable;
+  if (readonly) {
+    [provSelect, provNombre, fechaInput, vigenciaInput, condInput, ivaToggle, ivaPctInput, comentariosArea].forEach(el => el.disabled = true);
+  }
 
+  // === Funciones de soft refresh ===
+  function softRecomputeTotales() {
+    // Actualiza la celda Importe de cada fila + recrea el contenido de totales
+    for (const [itemId, it] of Object.entries(cot.items)) {
+      const cell = importeCellRefs[itemId];
+      if (cell) {
+        const importe = (Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0);
+        cell.textContent = money(importe);
+      }
+    }
+    if (totalesCardRef.node) {
+      const fresh = renderTotalesCardContent(cot);
+      totalesCardRef.node.replaceWith(fresh);
+      totalesCardRef.node = fresh;
+    }
+  }
+
+  function softRemoveItem(itemId, rowEl) {
+    delete cot.items[itemId];
+    delete importeCellRefs[itemId];
+    if (rowEl && rowEl.parentNode) rowEl.parentNode.removeChild(rowEl);
+    softRecomputeTotales();
+  }
+
+  function softAddItem(item) {
+    const id = 'it_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+    cot.items[id] = item;
+    // Reemplazar tabla completa solo si no hay tabla previa, si no insertar fila al final
+    if (itemsTbodyRef.node) {
+      const tr = itemRow(itemsCtx, id, item, softRemoveItem, softRecomputeTotales, importeCellRefs);
+      itemsTbodyRef.node.appendChild(tr);
+    } else {
+      // No había tabla (estaba vacío); repintar el card de items.
+      const fresh = renderItemsCard(itemsCtx, softAddItem, softRemoveItem, softRecomputeTotales, importeCellRefs, itemsTbodyRef);
+      itemsCardRef.node.replaceWith(fresh);
+      itemsCardRef.node = fresh;
+    }
+    softRecomputeTotales();
+  }
+
+  // === Acciones cabecera ===
   const head = h('div', { class: 'row' }, [
     h('h1', {}, [cotId ? 'Cotización' : 'Nueva cotización', ' ', estadoCotBadge(cot.estado)]),
     h('div', { style: { flex: 1 } }),
@@ -166,11 +232,7 @@ function renderEditor(ctx) {
     }, '↗ Emitir OC con esta cotización')
   ]);
 
-  // Inputs deshabilitados visualmente cuando readonly
-  if (readonly) {
-    [provSelect, provNombre, fechaInput, vigenciaInput, condInput, ivaToggle, ivaPctInput, comentariosArea].forEach(el => el.disabled = true);
-  }
-
+  // === Datos card ===
   const datosCard = h('div', { class: 'card' }, [
     h('h3', {}, 'Datos de la cotización'),
     h('div', { class: 'grid-2' }, [
@@ -182,9 +244,7 @@ function renderEditor(ctx) {
       h('div', { class: 'field' }, [
         h('label', {}, 'IVA'),
         h('div', { class: 'row' }, [
-          h('label', { class: 'row', style: { gap: '6px' } }, [
-            ivaToggle, h('span', {}, 'Costos incluyen IVA')
-          ]),
+          h('label', { class: 'row', style: { gap: '6px' } }, [ivaToggle, h('span', {}, 'Costos incluyen IVA')]),
           h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Tasa:'),
           ivaPctInput
         ])
@@ -194,10 +254,27 @@ function renderEditor(ctx) {
       [h('label', {}, 'Comentarios'), comentariosArea])
   ]);
 
-  const itemsCard = renderItemsCard(ctx, repaint);
-  const totalesCard = renderTotalesCard(cot);
+  // === Cobertura informativa ===
+  const coberturaCard = cobertura && cobertura.totalPedido > 0
+    ? renderCoberturaCard(cobertura, materiales)
+    : null;
 
-  const cardOriginRef = h('div', { class: 'card' }, [
+  // === Items card ===
+  const itemsTbodyRef = { node: null };
+  const itemsCardRef = { node: null };
+  const itemsCtx = { cot, materiales, conceptos, editable };
+
+  itemsCardRef.node = renderItemsCard(itemsCtx, softAddItem, softRemoveItem, softRecomputeTotales, importeCellRefs, itemsTbodyRef);
+
+  // === Totales card ===
+  const totalesCard = h('div', { class: 'card' }, [
+    h('h3', {}, 'Totales')
+  ]);
+  totalesCardRef.node = renderTotalesCardContent(cot);
+  totalesCard.appendChild(totalesCardRef.node);
+
+  // === Origen ===
+  const origenCard = h('div', { class: 'card' }, [
     h('h3', {}, 'Origen'),
     h('div', { class: 'muted', style: { fontSize: '13px' } },
       cot.reqIds && cot.reqIds.length > 0
@@ -211,16 +288,14 @@ function renderEditor(ctx) {
         : 'Sin requisición vinculada.')
   ]);
 
-  function repaint() {
-    renderShell(crumbsView(obraId, meta?.nombre, cotId),
-      h('div', {}, [head, datosCard, itemsCard, totalesCard, cardOriginRef]));
-  }
-  repaint();
+  renderShell(crumbsView(obraId, meta?.nombre, cotId),
+    h('div', {}, [head, datosCard, coberturaCard, itemsCardRef.node, totalesCard, origenCard]));
 }
 
-function renderItemsCard(ctx, repaint) {
-  const { cot } = ctx;
-  const editable = !cot.estado || ['borrador', 'recibida'].includes(cot.estado);
+// === Items table ===
+
+function renderItemsCard(ctx, softAddItem, softRemoveItem, softRecomputeTotales, importeCellRefs, tbodyRef) {
+  const { cot, materiales, editable } = ctx;
   const entries = Object.entries(cot.items || {});
 
   const head = h('div', { style: { padding: '14px 18px 0', display: 'flex', alignItems: 'center', gap: '8px' } }, [
@@ -228,15 +303,18 @@ function renderItemsCard(ctx, repaint) {
       'Items ', h('span', { class: 'muted', style: { fontWeight: 'normal', textTransform: 'none' } }, `(${num0(entries.length)})`)
     ]),
     h('div', { style: { flex: 1 } }),
-    editable && h('button', { class: 'btn sm primary', onClick: () => addItemDialog(ctx, repaint) }, '+ Item ad-hoc')
+    editable && h('button', { class: 'btn sm primary', onClick: () => addItemDialog(ctx, softAddItem) }, '+ Item ad-hoc')
   ]);
 
   if (entries.length === 0) {
-    return h('div', { class: 'card' }, [
-      head,
-      h('div', { class: 'empty' }, 'Sin items.')
-    ]);
+    return h('div', { class: 'card' }, [head, h('div', { class: 'empty' }, 'Sin items.')]);
   }
+
+  const tbody = h('tbody', {});
+  for (const [id, it] of entries) {
+    tbody.appendChild(itemRow(ctx, id, it, softRemoveItem, softRecomputeTotales, importeCellRefs));
+  }
+  tbodyRef.node = tbody;
 
   return h('div', { class: 'card', style: { padding: 0 } }, [
     head,
@@ -250,21 +328,20 @@ function renderItemsCard(ctx, repaint) {
         h('th', {}, 'Concepto OPUS'),
         editable && h('th', {}, '')
       ])]),
-      h('tbody', {}, entries.map(([id, it]) => itemRow(ctx, id, it, repaint)))
+      tbody
     ])
   ]);
 }
 
-function itemRow(ctx, itemId, it, repaint) {
-  const { cot, conceptos } = ctx;
-  const editable = !cot.estado || ['borrador', 'recibida'].includes(cot.estado);
+function itemRow(ctx, itemId, it, softRemoveItem, softRecomputeTotales, importeCellRefs) {
+  const { cot, conceptos, editable } = ctx;
   const importe = (Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0);
 
   const matLabel = h('div', {}, [
     it.clave && h('div', { class: 'mono', style: { fontSize: '11px', color: 'var(--text-2)' } }, [
       it.clave,
       it.origen === 'ad_hoc_compras' && h('span', { class: 'tag warn', style: { marginLeft: '6px', fontSize: '10px' } }, 'AD-HOC compras'),
-      it.origen === 'ad_hoc' || it.origen === 'ad_hoc_materiales'
+      (it.origen === 'ad_hoc' || it.origen === 'ad_hoc_materiales')
         ? h('span', { class: 'tag warn', style: { marginLeft: '6px', fontSize: '10px' } }, 'AD-HOC almacén') : null
     ]),
     h('div', {}, it.descripcion || '—'),
@@ -274,13 +351,13 @@ function itemRow(ctx, itemId, it, repaint) {
   const cantInput = h('input', { type: 'number', step: '0.01', min: '0', value: String(it.cantidad || 0), style: { width: '90px' } });
   cantInput.addEventListener('input', () => {
     cot.items[itemId].cantidad = Number(cantInput.value) || 0;
-    repaint();
+    softRecomputeTotales();
   });
 
   const costoInput = h('input', { type: 'number', step: '0.01', min: '0', value: String(it.costoUnitario || 0), style: { width: '110px' } });
   costoInput.addEventListener('input', () => {
     cot.items[itemId].costoUnitario = Number(costoInput.value) || 0;
-    repaint();
+    softRecomputeTotales();
   });
 
   if (!editable) { cantInput.disabled = true; costoInput.disabled = true; }
@@ -294,27 +371,31 @@ function itemRow(ctx, itemId, it, repaint) {
     ])
     : h('span', { class: 'muted', style: { fontSize: '12px' } }, '—');
 
-  return h('tr', {}, [
+  const importeCell = h('td', { class: 'num' }, money(importe));
+  importeCellRefs[itemId] = importeCell;
+
+  const tr = h('tr', {}, [
     h('td', { style: { maxWidth: '320px' } }, matLabel),
     h('td', {}, it.unidad || ''),
     h('td', { class: 'num' }, cantInput),
     h('td', { class: 'num' }, costoInput),
-    h('td', { class: 'num' }, money(importe)),
-    h('td', {}, conceptoLabel),
-    editable && h('td', {}, h('button', {
-      class: 'btn sm danger',
-      onClick: () => {
-        delete cot.items[itemId];
-        repaint();
-      }
-    }, '🗑'))
+    importeCell,
+    h('td', {}, conceptoLabel)
   ]);
+
+  if (editable) {
+    const delBtn = h('button', { class: 'btn sm danger' }, '🗑');
+    delBtn.addEventListener('click', () => softRemoveItem(itemId, tr));
+    tr.appendChild(h('td', {}, delBtn));
+  }
+  return tr;
 }
 
-function renderTotalesCard(cot) {
+// === Totales card content (replaceable) ===
+
+function renderTotalesCardContent(cot) {
   const t = deriveTotales(cot);
-  return h('div', { class: 'card' }, [
-    h('h3', {}, 'Totales'),
+  return h('div', {}, [
     h('div', { class: 'grid-3' }, [
       kv('Importe bruto', money(t.importeBruto)),
       kv('Subtotal (sin IVA)', money(t.subtotal)),
@@ -328,11 +409,32 @@ function renderTotalesCard(cot) {
   ]);
 }
 
-// ====== Acciones ======
+// === Cobertura card ===
+
+function renderCoberturaCard(cobertura, materiales) {
+  const pct = Math.round(cobertura.pct * 100);
+  const color = pct >= 100 ? 'var(--ok)' : pct > 0 ? 'var(--warn)' : 'var(--text-2)';
+
+  return h('div', { class: 'card' }, [
+    h('h3', {}, 'Cobertura de la requisición'),
+    h('div', { class: 'row', style: { gap: '12px', alignItems: 'center', marginBottom: '10px' } }, [
+      h('div', { style: { fontSize: '20px', fontWeight: '600', color, fontFamily: 'var(--mono)', minWidth: '60px' } }, `${pct}%`),
+      h('div', { style: { flex: 1, height: '8px', background: 'var(--bg-3)', borderRadius: '4px', overflow: 'hidden' } },
+        h('div', { style: { height: '100%', width: `${Math.min(pct, 100)}%`, background: color } })),
+      h('div', { class: 'muted', style: { fontSize: '12px' } },
+        `${num(cobertura.totalCubierto)} de ${num(cobertura.totalPedido)} unidades cubiertas en otras OC`)
+    ]),
+    h('div', { class: 'muted', style: { fontSize: '11px' } },
+      pct >= 100
+        ? '✓ Esta requisición ya está completamente cubierta. Esta cotización quedaría sobre lo ya pedido.'
+        : 'Esta cotización cubre lo restante. Se pueden emitir varias OCs hasta llegar al 100%.')
+  ]);
+}
+
+// === Acciones ===
 
 async function onSave(ctx, marcarRecibida) {
   const { obraId, cotId, cot } = ctx;
-  // Validación mínima
   if (!cot.proveedor?.nombre) { toast('Captura un proveedor', 'danger'); return; }
   if (Object.keys(cot.items || {}).length === 0) { toast('La cotización no tiene items', 'danger'); return; }
 
@@ -377,7 +479,8 @@ async function onEmitirOC(ctx) {
         ' por un total de ', h('b', { style: { color: 'var(--accent)' } }, money(totales.total)), '.']),
       h('p', { class: 'muted', style: { fontSize: '12px' } }, [
         'La OC se publica al buzón de bitácora para que el contador la apruebe y pague. ',
-        'Las requisiciones vinculadas se cierran y otras cotizaciones de las mismas requisiciones se descartan.'
+        'La requisición se marca como cerrada solo cuando la cobertura llega al 100%; ',
+        'si esta OC cubre solo parte, la req sigue abierta para más cotizaciones.'
       ])
     ]),
     confirmLabel: 'Emitir', size: 'lg',
@@ -388,6 +491,7 @@ async function onEmitirOC(ctx) {
         navigate(`/obras/${obraId}/oc`);
         return true;
       } catch (err) {
+        console.error('[emitirOC]', err);
         toast('Error: ' + err.message, 'danger');
         return false;
       }
@@ -400,7 +504,7 @@ async function emitirOCFromCotizacion(ctx, totales) {
   const u = state.user;
   const autor = { uid: u.uid, displayName: u.displayName || '', email: u.email || '', app: 'compras' };
 
-  // 1. Crear OC en /shared/compras/obras/{obraId}/oc
+  // 1. Crear OC
   const ocPayload = {
     reqIds: cot.reqIds || [],
     cotizacionGanadoraId: cotId,
@@ -423,9 +527,7 @@ async function emitirOCFromCotizacion(ctx, totales) {
   };
   const ocId = await createOC(obraId, ocPayload);
 
-  // 2. Construir el desglose por concepto OPUS para que bitácora lo reciba
-  // ya armado y solo tenga que mapear conceptoKey → concepto_id (que ya
-  // coincide en la suite unificada) al crear el sogrub_proy_movimientos.
+  // 2. Desglose por concepto OPUS para bitácora
   const desglose = Object.values(cot.items)
     .filter(it => it.conceptoKey)
     .map(it => ({
@@ -433,17 +535,16 @@ async function emitirOCFromCotizacion(ctx, totales) {
       conceptoClave: it.clave || '',
       conceptoDescripcion: it.descripcion || '',
       monto: ((Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0)) * (cot.incluyeIva
-        ? 1 / (1 + (cot.ivaPct ?? 0.16))   // si incluye IVA, mandamos el subtotal sin IVA
+        ? 1 / (1 + (cot.ivaPct ?? 0.16))
         : 1)
     }));
 
-  // 3. Push al buzón con tipo='oc_materiales'
+  // 3. Push al buzón
   const buzonItem = {
     tipo: 'oc_materiales',
     origenApp: 'compras',
     obraId,
     ocId,
-    numero: ocPayload.subtotal && ocId,    // bitácora asignará el folio CP-YYYY-NNN al aprobar
     proveedor: cot.proveedor,
     reqIds: cot.reqIds || [],
     fechaEmision: ocPayload.fechaEmision,
@@ -475,7 +576,7 @@ async function emitirOCFromCotizacion(ctx, totales) {
   };
   const buzonOcId = await pushBuzonItem(buzonItem);
 
-  // 4. Actualizar la OC con la referencia al item del buzón
+  // 4. Update OC con referencia al buzón
   await updateOC(obraId, ocId, { buzonId: buzonOcId, enviadaBuzonAt: Date.now() });
 
   // 5. Marcar la cotización como ganadora
@@ -486,61 +587,55 @@ async function emitirOCFromCotizacion(ctx, totales) {
     ganadoraAt: Date.now()
   });
 
-  // 6. Descartar las demás cotizaciones que cubrían las mismas requisiciones
-  const todas = await listCotizaciones(obraId);
-  for (const [otherId, otherCot] of Object.entries(todas)) {
-    if (otherId === cotId) continue;
-    if (otherCot.estado === 'ganadora' || otherCot.estado === 'descartada') continue;
-    const overlapsReqs = (otherCot.reqIds || []).some(r => (cot.reqIds || []).includes(r));
-    if (overlapsReqs) {
-      await updateCotizacion(obraId, otherId, {
-        estado: 'descartada',
-        descartadaAt: Date.now(),
-        motivoDescarte: `Otra cotización ganó (OC ${ocId.slice(0, 6)})`
-      });
-    }
-  }
-
-  // 7. Cerrar las requisiciones en el buzón (estado='cerrado' con ocBuzonId)
-  // y propagar la referencia a la requisición original en materiales para
-  // que el almacenista vea el folio de la OC.
+  // 6. Para cada req cubierta: agregar la OC a la lista, recalcular cobertura
+  // y solo cerrar si llega a 100%. NO descartamos otras cotizaciones en
+  // estado 'recibida' — pueden ser para los items aún no cubiertos.
+  const ocsActualizadas = await listOC(obraId);
   for (const reqBuzonId of (cot.reqIds || [])) {
-    await updateBuzonItem(reqBuzonId, {
-      estado: 'cerrado',
-      ocBuzonId: buzonOcId,
-      ocId,
-      cerradoAt: Date.now(),
-      cerradoPor: autor
-    });
     const reqItem = await getBuzonItem(reqBuzonId);
-    if (reqItem?.reqId && reqItem?.obraId) {
+    if (!reqItem) continue;
+
+    const cobertura = calcularCoberturaReq({ ...reqItem, id: reqBuzonId }, ocsActualizadas);
+    const ocBuzonIds = Array.from(new Set([...(reqItem.ocBuzonIds || []), buzonOcId]));
+    const ocIds = Array.from(new Set([...(reqItem.ocIds || []), ocId]));
+
+    const patch = {
+      ocBuzonIds, ocIds,
+      coberturaPct: cobertura.pct,
+      // Compat: mantener ocBuzonId/ocId apuntando al primero (lectores viejos)
+      ocBuzonId: reqItem.ocBuzonId || buzonOcId,
+      ocId: reqItem.ocId || ocId
+    };
+    if (cobertura.completa) {
+      patch.estado = 'cerrado';
+      patch.cerradoAt = Date.now();
+      patch.cerradoPor = autor;
+    }
+    await updateBuzonItem(reqBuzonId, patch);
+
+    if (reqItem.reqId && reqItem.obraId) {
       await setRequisicionOcRef(reqItem.obraId, reqItem.reqId, {
-        ocBuzonId: buzonOcId,
-        ocId
+        ocBuzonIds, ocIds, coberturaPct: cobertura.pct,
+        ocBuzonId: reqItem.ocBuzonId || buzonOcId,
+        ocId: reqItem.ocId || ocId
       });
     }
   }
 }
 
-// ====== Helpers ======
+// === Helpers ===
 
-function addItemDialog(ctx, repaint) {
-  const { cot, materiales } = ctx;
-  // Permite agregar un material existente del catálogo o uno totalmente nuevo
-  // (ad-hoc compras). Los del catálogo conservan materialKey; los nuevos
-  // generan un materialKey efímero (no se persiste al catálogo desde acá —
-  // eso pasa al emitir la OC a través de un createMaterialAdHocDesdeCompras
-  // futuro; por ahora viven solo en la cotización/OC).
+function addItemDialog(ctx, softAddItem) {
+  const { materiales } = ctx;
   const materialList = Object.entries(materiales)
     .sort((a, b) => (a[1].descripcion || '').localeCompare(b[1].descripcion || ''))
-    .slice(0, 500); // Cap para que no truene la UI con catálogos grandes
+    .slice(0, 500);
 
   const matSelect = h('select', {}, [
     h('option', { value: '' }, '— elige material existente —'),
     ...materialList.map(([k, m]) =>
       h('option', { value: k }, `${m.clave} · ${m.descripcion}`))
   ]);
-
   const adHocClave = h('input', { placeholder: 'Clave (opcional, ej. AD-001)' });
   const adHocDesc = h('input', { placeholder: 'Descripción del material' });
   const adHocUnidad = h('input', { placeholder: 'Unidad (PZA, KG, etc.)' });
@@ -573,11 +668,10 @@ function addItemDialog(ctx, repaint) {
       const cant = Number(cantidad.value) || 0;
       const cost = Number(costo.value) || 0;
       if (cant <= 0) { toast('Cantidad inválida', 'danger'); return false; }
-      const id = 'it_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-
+      let item;
       if (matSelect.value) {
         const m = materiales[matSelect.value];
-        cot.items[id] = {
+        item = {
           materialKey: matSelect.value,
           clave: m.clave, descripcion: m.descripcion, unidad: m.unidad,
           cantidad: cant, costoUnitario: cost,
@@ -588,8 +682,8 @@ function addItemDialog(ctx, repaint) {
       } else {
         const desc = adHocDesc.value.trim();
         if (!desc) { toast('Captura una descripción', 'danger'); return false; }
-        cot.items[id] = {
-          materialKey: 'adhoc_' + id,
+        item = {
+          materialKey: 'adhoc_' + Date.now().toString(36),
           clave: adHocClave.value.trim(),
           descripcion: desc,
           unidad: adHocUnidad.value.trim() || 'PZA',
@@ -599,7 +693,7 @@ function addItemDialog(ctx, repaint) {
           notas: ''
         };
       }
-      repaint();
+      softAddItem(item);
       return true;
     }
   });
@@ -619,14 +713,9 @@ function fromInputDateLocal(s) {
   const [y, m, d] = s.split('-').map(Number);
   return new Date(y, m - 1, d).getTime();
 }
-
 function kv(label, val) {
-  return h('div', { class: 'field' }, [
-    h('label', {}, label),
-    h('div', {}, val || '—')
-  ]);
+  return h('div', { class: 'field' }, [h('label', {}, label), h('div', {}, val || '—')]);
 }
-
 function crumbsView(obraId, nombre, cotId) {
   return [
     { label: 'Obras', to: '/' },
