@@ -1,7 +1,7 @@
 import { h } from '../util/dom.js';
 import { renderShell } from './shell.js';
 import { state, setState } from '../state/store.js';
-import { getObraMetaLegacy, listOC, getBuzonItem } from '../services/db.js';
+import { getObraMetaLegacy, listOC, listBuzon, filtrarBuzon } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num0, money, ocFolio } from '../util/format.js';
 
@@ -23,17 +23,39 @@ export async function renderOCList({ params, query }) {
   setState({ obraActual: obraId });
   renderShell(crumbsList(obraId, '...'), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const [meta, ocs] = await Promise.all([
+  const [meta, ocs, buzon] = await Promise.all([
     getObraMetaLegacy(obraId),
-    listOC(obraId)
+    listOC(obraId),
+    listBuzon()
   ]);
+
+  // Estado efectivo desde el buzón (fuente de verdad). El espejo local
+  // puede estar stale si bitácora rechazó/marcó huérfano sin pasar por
+  // las funciones que sincronizan al espejo.
+  const estadoBuzonToOC = {
+    aprobado: 'aprobada', pagado: 'pagada', cobrado: 'pagada',
+    cerrado: 'cerrada', rechazado: 'rechazada', huerfano: 'huerfana',
+    en_revision: 'enviada_buzon', recibido: 'enviada_buzon'
+  };
+  for (const [, oc] of Object.entries(ocs)) {
+    if (oc.estado === 'cancelada') continue;   // Cancelada local manda
+    if (!oc.buzonId) continue;
+    const buzonItem = buzon[oc.buzonId];
+    if (!buzonItem) continue;
+    const estadoBuzon = estadoBuzonToOC[buzonItem.estado];
+    if (estadoBuzon && estadoBuzon !== oc.estado) {
+      oc._estadoEfectivo = estadoBuzon;  // Solo para render; no persistimos en bulk
+    }
+  }
 
   const tabId = query?.tab || 'pendientes';
   const tab = TABS.find(t => t.id === tabId) || TABS[0];
 
+  // Para el filtrado por tab usamos el estado efectivo (no el cached).
+  const estadoOf = oc => oc._estadoEfectivo || oc.estado;
   const allEntries = Object.entries(ocs);
   const filtered = tab.estados
-    ? allEntries.filter(([, oc]) => tab.estados.includes(oc.estado))
+    ? allEntries.filter(([, oc]) => tab.estados.includes(estadoOf(oc)))
     : allEntries;
   filtered.sort((a, b) => (b[1].numero || 0) - (a[1].numero || 0));
 
@@ -45,7 +67,7 @@ export async function renderOCList({ params, query }) {
   const tabBar = h('div', { class: 'row', style: { marginBottom: '14px', gap: '4px' } },
     TABS.map(t => {
       const count = (t.estados
-        ? allEntries.filter(([, oc]) => t.estados.includes(oc.estado))
+        ? allEntries.filter(([, oc]) => t.estados.includes(estadoOf(oc)))
         : allEntries).length;
       return h('button', {
         class: 'btn sm ' + (t.id === tabId ? 'primary' : 'ghost'),
@@ -91,6 +113,7 @@ export async function renderOCList({ params, query }) {
 
 function ocRow(obraId, ocId, oc) {
   const itemsCount = oc.items ? Object.keys(oc.items).length : 0;
+  const estado = oc._estadoEfectivo || oc.estado;
   return h('tr', {
     style: { cursor: 'pointer' },
     onClick: () => navigate(`/obras/${obraId}/oc/${ocId}`)
@@ -100,7 +123,7 @@ function ocRow(obraId, ocId, oc) {
     h('td', {}, h('b', {}, oc.proveedor?.nombre || '—')),
     h('td', { class: 'num' }, num0(itemsCount)),
     h('td', { class: 'num' }, money(oc.total || 0)),
-    h('td', {}, estadoOCBadge(oc.estado)),
+    h('td', {}, estadoOCBadge(estado)),
     h('td', { class: 'mono', style: { fontSize: '12px' } }, oc.folioContable || '—')
   ]);
 }

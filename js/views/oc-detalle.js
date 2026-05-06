@@ -4,7 +4,7 @@ import { state, setState } from '../state/store.js';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
-  getOC, getBuzonItem, cancelarOC
+  getOC, getBuzonItem, cancelarOC, updateOC
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js';
@@ -39,12 +39,26 @@ export async function renderOCDetalle({ params }) {
   const conceptos = catCon?.conceptos || {};
   const materiales = catMat?.items || {};
 
+  // Estado efectivo: el del buzón es la fuente de verdad cuando difiere del
+  // espejo local de la OC. Si está stale, lo arreglamos en background
+  // (self-heal) para que la lista de OC tampoco mienta.
+  const estadoBuzonToOC = {
+    aprobado: 'aprobada', pagado: 'pagada', cobrado: 'pagada',
+    cerrado: 'cerrada', rechazado: 'rechazada', huerfano: 'huerfana',
+    en_revision: 'enviada_buzon', recibido: 'enviada_buzon'
+  };
+  const estadoEfectivo = (buzonItem && estadoBuzonToOC[buzonItem.estado]) || oc.estado;
+  if (oc.estado !== estadoEfectivo && oc.estado !== 'cancelada') {
+    updateOC(obraId, ocId, { estado: estadoEfectivo, actualizadoAt: Date.now() })
+      .catch(err => console.warn('[OC self-heal]', err));
+  }
+
   const folio = ocFolio(oc.numero);
 
   const head = h('div', { class: 'row' }, [
-    h('h1', {}, [folio, ' ', estadoOCBadge(oc.estado)]),
+    h('h1', {}, [folio, ' ', estadoOCBadge(estadoEfectivo)]),
     h('div', { style: { flex: 1 } }),
-    ESTADOS_CANCELABLES.has(oc.estado) && h('button', {
+    ESTADOS_CANCELABLES.has(estadoEfectivo) && h('button', {
       class: 'btn danger',
       onClick: () => onCancelar(obraId, ocId, oc)
     }, '✕ Cancelar OC')
@@ -63,19 +77,7 @@ export async function renderOCDetalle({ params }) {
     ])
   ]);
 
-  const buzonCard = buzonItem && h('div', { class: 'card' }, [
-    h('h3', {}, 'Estado en contabilidad'),
-    h('div', { class: 'row' }, [
-      buzonEstadoBadge(buzonItem.estado),
-      buzonItem.folio && h('span', { class: 'mono', style: { fontSize: '12px' } }, buzonItem.folio),
-      h('span', { class: 'muted', style: { fontSize: '12px' } },
-        buzonItem.actualizadoAt ? `actualizado ${new Date(buzonItem.actualizadoAt).toLocaleString('es-MX')}` : `recibido ${new Date(buzonItem.creadoAt).toLocaleString('es-MX')}`)
-    ]),
-    buzonItem.estado === 'rechazado' && buzonItem.motivoRechazo && h('div', {
-      class: 'tag danger',
-      style: { marginTop: '8px', whiteSpace: 'normal', maxWidth: '100%' }
-    }, [h('b', {}, 'Motivo: '), buzonItem.motivoRechazo])
-  ]);
+  const buzonCard = buzonItem && renderBuzonCard(buzonItem);
 
   const itemsCard = renderItemsCard(oc, materiales, conceptos);
   const totalesCard = renderTotalesCard(oc);
@@ -157,6 +159,57 @@ function renderTotalesCard(oc) {
       kv('Retenciones', money(oc.retencionesTotal || 0)),
       kv('Total', h('b', { style: { fontSize: '20px', color: 'var(--accent)' } }, money(oc.total || 0))),
       kv('Régimen IVA', oc.incluyeIva ? 'Costos brutos' : 'Costos sin IVA')
+    ])
+  ]);
+}
+
+function renderBuzonCard(buzonItem) {
+  const motivoRechazo = buzonItem.motivoRechazo || buzonItem.comentarioRechazo;
+  const descHuerfano = buzonItem.descripcionHuerfano;
+  const histEntries = Object.entries(buzonItem.estadoHistorial || {})
+    .sort(([, a], [, b]) => (a.at || 0) - (b.at || 0));
+
+  return h('div', { class: 'card' }, [
+    h('h3', {}, 'Estado en contabilidad'),
+    h('div', { class: 'row' }, [
+      buzonEstadoBadge(buzonItem.estado),
+      buzonItem.folio && h('span', { class: 'mono', style: { fontSize: '12px' } }, buzonItem.folio),
+      h('span', { class: 'muted', style: { fontSize: '12px' } },
+        buzonItem.actualizadoAt
+          ? `actualizado ${new Date(buzonItem.actualizadoAt).toLocaleString('es-MX')}`
+          : `recibido ${new Date(buzonItem.creadoAt).toLocaleString('es-MX')}`)
+    ]),
+
+    // Mensajes contextuales según el estado
+    buzonItem.estado === 'rechazado' && motivoRechazo && h('div', {
+      class: 'tag danger',
+      style: { marginTop: '10px', whiteSpace: 'normal', maxWidth: '100%', display: 'block' }
+    }, [h('b', {}, 'Motivo del rechazo: '), motivoRechazo]),
+
+    buzonItem.estado === 'huerfano' && h('div', {
+      class: 'tag warn',
+      style: { marginTop: '10px', whiteSpace: 'normal', maxWidth: '100%', display: 'block' }
+    }, [
+      h('b', {}, '⚠ Movimiento contable eliminado por el contador. '),
+      descHuerfano || 'El movimiento ya no existe en bitácora — compras puede reemitir o cancelar la OC.'
+    ]),
+
+    buzonItem.actualizadoPorContador && (buzonItem.estado === 'aprobado' || buzonItem.estado === 'pagado') &&
+      h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } },
+        '✎ El contador editó manualmente el movimiento contable.'),
+
+    // Historial de transiciones
+    histEntries.length > 0 && h('details', { style: { marginTop: '10px' } }, [
+      h('summary', { class: 'muted', style: { cursor: 'pointer', fontSize: '12px' } },
+        `Historial (${histEntries.length} cambio${histEntries.length === 1 ? '' : 's'})`),
+      h('div', { style: { marginTop: '8px', paddingLeft: '12px', borderLeft: '2px solid var(--border)' } },
+        histEntries.map(([key, h2]) => h('div', { style: { fontSize: '12px', marginBottom: '4px' } }, [
+          h('b', {}, h2.estado),
+          h('span', { class: 'muted', style: { marginLeft: '6px' } },
+            h2.at ? new Date(h2.at).toLocaleString('es-MX') : ''),
+          h2.nota && h('span', { class: 'muted', style: { marginLeft: '6px', fontStyle: 'italic' } },
+            ` — ${h2.nota}`)
+        ])))
     ])
   ]);
 }
