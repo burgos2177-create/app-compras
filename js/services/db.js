@@ -143,18 +143,75 @@ export function filtrarBuzon(buzon, { tipo, obraId, estado, estadosIn } = {}) {
   return out;
 }
 
-// === Proveedores (lectura desde bitácora — fuente única por ahora) ===
+// === Proveedores (lectura/escritura compatible con bitácora) ===
 //
 // Decisión 2 del 2026-05-06: arrancar con lectura/escritura compatible con
-// bitácora hasta que se migre a /shared/proveedores/*. El path autoritativo
-// vive en /legacy/bitacora/sogrub_proveedores (global) y bitácora también
-// tiene una lista por proyecto en /legacy/bitacora/sogrub_proy_proveedores.
+// bitácora hasta que se migre a /shared/proveedores/*. Bitácora almacena
+// /legacy/bitacora/sogrub_proveedores como ARRAY de objetos, donde cada
+// item tiene { id: UUID, nombre, rfc, telefono, email, notas }. Las escrituras
+// reescriben el array completo (mismo patrón que appsogrub/firebase.js).
+//
+// Para evitar inconsistencias con escrituras concurrentes (raro pero posible),
+// las funciones de mutación leen-modifican-escriben en una sola operación;
+// no usan transaction() porque el shape array no se presta bien.
 
 export async function listProveedoresGlobal() {
-  return (await rread('/legacy/bitacora/sogrub_proveedores')) || {};
+  const raw = await rread('/legacy/bitacora/sogrub_proveedores');
+  return Array.isArray(raw) ? raw : [];
 }
+
 export async function getProveedor(provId) {
-  return await rread(`/legacy/bitacora/sogrub_proveedores/${provId}`);
+  const list = await listProveedoresGlobal();
+  return list.find(p => p.id === provId) || null;
+}
+
+export async function addProveedorGlobal({ nombre, rfc = '', telefono = '', email = '', notas = '' }) {
+  const list = await listProveedoresGlobal();
+  const id = crypto.randomUUID();
+  const item = { id, nombre, rfc, telefono, email, notas };
+  list.push(item);
+  await rset('/legacy/bitacora/sogrub_proveedores', list);
+  return item;
+}
+
+export async function updateProveedorGlobal(provId, patch) {
+  const list = await listProveedoresGlobal();
+  const idx = list.findIndex(p => p.id === provId);
+  if (idx === -1) throw new Error('Proveedor no encontrado');
+  list[idx] = { ...list[idx], ...patch };
+  await rset('/legacy/bitacora/sogrub_proveedores', list);
+  return list[idx];
+}
+
+export async function deleteProveedorGlobal(provId) {
+  const list = await listProveedoresGlobal();
+  const filtered = list.filter(p => p.id !== provId);
+  if (filtered.length === list.length) return false;
+  await rset('/legacy/bitacora/sogrub_proveedores', filtered);
+  return true;
+}
+
+// === Material ad-hoc creado desde compras ===
+//
+// Decisión 5: items ad-hoc se diferencian por origen. Compras puede crear
+// materiales que no estaban en el catálogo OPUS (sustituciones, agregados
+// del comprador). Se persiste en /shared/materiales/obras/{obraId}/catalogo/items
+// para que el almacenista los vea con badge distintivo.
+//
+// Nota: el catálogo de materiales lo escribe materiales como autoritativo;
+// compras agrega items por excepción. Mantener `origen: 'ad_hoc_compras'` para
+// que el preservador de catálogo en saveCatalogoMateriales no los borre al
+// re-importar el XLS de OPUS (ya preserva todo lo que no sea 'opus').
+
+export async function createMaterialAdHocDesdeCompras(obraId, materialKey, data, autor) {
+  const item = {
+    ...data,
+    origen: 'ad_hoc_compras',
+    creadoPor: autor || null,
+    creadoAt: Date.now()
+  };
+  await rset(`/shared/materiales/obras/${obraId}/catalogo/items/${materialKey}`, item);
+  return item;
 }
 
 // === Cotizaciones (esta app es escritor único, MVP) ===

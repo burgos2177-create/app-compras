@@ -8,16 +8,23 @@ import { renderAdmin } from './views/admin.js';
 import { renderInbox } from './views/inbox.js';
 import { renderInboxDetalle } from './views/inbox-detalle.js';
 import { renderCotizaciones } from './views/cotizaciones.js';
+import { renderCotizacionDetalle } from './views/cotizacion-detalle.js';
 import { renderOCList } from './views/oc.js';
+import { renderOCDetalle } from './views/oc-detalle.js';
+import { renderProveedores } from './views/proveedores.js';
 import { h, mount } from './util/dom.js';
 
 route('/',                                  () => renderObrasList());
 route('/admin',                             () => renderAdmin());
+route('/proveedores',                       () => renderProveedores());
 route('/obras/:id',                         renderObra);
 route('/obras/:id/inbox',                   renderInbox);
 route('/obras/:id/inbox/:buzonid',          renderInboxDetalle);
 route('/obras/:id/cotizaciones',            renderCotizaciones);
+route('/obras/:id/cotizaciones/nueva',      renderCotizacionDetalle);
+route('/obras/:id/cotizaciones/:cotid',     renderCotizacionDetalle);
 route('/obras/:id/oc',                      renderOCList);
+route('/obras/:id/oc/:ocid',                renderOCDetalle);
 
 let started = false;
 

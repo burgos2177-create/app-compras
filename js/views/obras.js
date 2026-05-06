@@ -21,6 +21,7 @@ export async function renderObrasList() {
   const head = h('div', { class: 'row' }, [
     h('h1', {}, 'Obras'),
     h('div', { class: 'spacer', style: { flex: 1 } }),
+    h('button', { class: 'btn ghost', onClick: () => navigate('/proveedores') }, '🏷️ Proveedores'),
     isAdmin && h('button', { class: 'btn ghost', onClick: () => navigate('/admin') }, '⚙ Admin')
   ]);
 
