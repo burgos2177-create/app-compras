@@ -359,3 +359,70 @@ export async function updateOC(obraId, ocId, patch) {
 export async function deleteOC(obraId, ocId) {
   return rremove(`obras/${obraId}/oc/${ocId}`);
 }
+
+// Cancela una OC: marca la OC como cancelada, marca el item del buzón como
+// rechazado/cancelado, y libera cobertura en las requisiciones de origen
+// (recalcula coberturaPct sin esta OC). Si la req había llegado a 'cerrado'
+// solo gracias a esta OC, vuelve a 'aprobado' para que se pueda recotizar.
+export async function cancelarOC(obraId, ocId, motivo, autor) {
+  const oc = await getOC(obraId, ocId);
+  if (!oc) throw new Error('OC no encontrada');
+
+  // 1. Marcar OC como cancelada
+  await updateOC(obraId, ocId, {
+    estado: 'cancelada',
+    canceladaAt: Date.now(),
+    canceladaPor: autor,
+    motivoCancelacion: motivo || null
+  });
+
+  // 2. Marcar item del buzón como rechazado (si todavía existe y no lo
+  // movió el contador). El estado 'cancelada' en el buzón no existe — usamos
+  // 'rechazado' con motivo para que la maquinaria existente lo trate
+  // correctamente (no entra al cálculo de saldos).
+  if (oc.buzonId) {
+    const buzonItem = await getBuzonItem(oc.buzonId);
+    if (buzonItem && !['pagado', 'cerrado'].includes(buzonItem.estado)) {
+      await updateBuzonItem(oc.buzonId, {
+        estado: 'rechazado',
+        motivoRechazo: `OC cancelada por compras${motivo ? ': ' + motivo : ''}`,
+        rechazadoAt: Date.now(),
+        rechazadoPor: autor
+      });
+    }
+  }
+
+  // 3. Recalcular cobertura en cada requisición vinculada y reabrir si quedó
+  // sin cobertura completa (porque ahora esta OC ya no cuenta).
+  if (Array.isArray(oc.reqIds) && oc.reqIds.length > 0) {
+    const ocs = await listOC(obraId);   // Ya incluye la OC marcada como cancelada
+    for (const reqBuzonId of oc.reqIds) {
+      const reqItem = await getBuzonItem(reqBuzonId);
+      if (!reqItem) continue;
+
+      const cobertura = calcularCoberturaReq({ ...reqItem, id: reqBuzonId }, ocs);
+      const ocBuzonIds = (reqItem.ocBuzonIds || []).filter(id => id !== oc.buzonId);
+      const ocIds = (reqItem.ocIds || []).filter(id => id !== ocId);
+
+      const patch = {
+        ocBuzonIds, ocIds,
+        coberturaPct: cobertura.pct
+      };
+      // Si la req estaba cerrada por esta OC y ya no está cubierta al 100%,
+      // reabrirla a 'aprobado' para que se pueda recotizar.
+      if (reqItem.estado === 'cerrado' && !cobertura.completa) {
+        patch.estado = 'aprobado';
+        patch.cerradoAt = null;
+        patch.cerradoPor = null;
+        patch.reabiertaPorCancelacionOC = ocId;
+      }
+      await updateBuzonItem(reqBuzonId, patch);
+
+      if (reqItem.reqId && reqItem.obraId) {
+        await setRequisicionOcRef(reqItem.obraId, reqItem.reqId, {
+          ocBuzonIds, ocIds, coberturaPct: cobertura.pct
+        });
+      }
+    }
+  }
+}

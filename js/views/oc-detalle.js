@@ -4,11 +4,13 @@ import { state, setState } from '../state/store.js';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
-  getOC, getBuzonItem
+  getOC, getBuzonItem, cancelarOC
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js';
 import { estadoOCBadge } from './oc.js';
+
+const ESTADOS_CANCELABLES = new Set(['borrador', 'enviada_buzon', 'aprobada', 'rechazada', 'huerfana']);
 
 // Detalle de OC: read-only. Muestra estado de la OC y estado real del item
 // del buzón en bitácora (porque al aprobar/pagar/cerrar contabilidad mueve el
@@ -41,7 +43,11 @@ export async function renderOCDetalle({ params }) {
 
   const head = h('div', { class: 'row' }, [
     h('h1', {}, [folio, ' ', estadoOCBadge(oc.estado)]),
-    h('div', { style: { flex: 1 } })
+    h('div', { style: { flex: 1 } }),
+    ESTADOS_CANCELABLES.has(oc.estado) && h('button', {
+      class: 'btn danger',
+      onClick: () => onCancelar(obraId, ocId, oc)
+    }, '✕ Cancelar OC')
   ]);
 
   const datosCard = h('div', { class: 'card' }, [
@@ -153,6 +159,36 @@ function renderTotalesCard(oc) {
       kv('Régimen IVA', oc.incluyeIva ? 'Costos brutos' : 'Costos sin IVA')
     ])
   ]);
+}
+
+async function onCancelar(obraId, ocId, oc) {
+  const motivo = h('textarea', { rows: 3, placeholder: 'Razón de la cancelación (visible para el almacenista y el contador)' });
+  await modal({
+    title: 'Cancelar orden de compra',
+    body: h('div', {}, [
+      h('p', {}, [`Se cancelará la OC `, h('b', {}, ocFolio(oc.numero)), ` al proveedor `, h('b', {}, oc.proveedor?.nombre || '—'), '.']),
+      h('p', { class: 'muted', style: { fontSize: '12px' } },
+        'El item del buzón se marcará como rechazado y la cobertura de las requisiciones vinculadas se libera. Si alguna requisición quedó cerrada solo por esta OC, se reabrirá automáticamente para poder recotizar.'),
+      h('div', { class: 'field' }, [h('label', {}, 'Motivo'), motivo])
+    ]),
+    confirmLabel: 'Cancelar OC', danger: true, size: 'lg',
+    onConfirm: async () => {
+      const m = motivo.value.trim();
+      if (!m) { toast('Captura un motivo', 'danger'); return false; }
+      try {
+        const u = state.user;
+        await cancelarOC(obraId, ocId, m, {
+          uid: u.uid, displayName: u.displayName || '', email: u.email || '', app: 'compras'
+        });
+        toast('OC cancelada', 'ok');
+        navigate(`/obras/${obraId}/oc?tab=canceladas`);
+        return true;
+      } catch (err) {
+        toast('Error: ' + err.message, 'danger');
+        return false;
+      }
+    }
+  });
 }
 
 function buzonEstadoBadge(estado) {

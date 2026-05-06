@@ -5,9 +5,20 @@ import { getObraMetaLegacy, listOC, getBuzonItem } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num0, money, ocFolio } from '../util/format.js';
 
-// Lista de OC por obra. La emisión se hace desde el detalle de cotización.
+// Lista de OC por obra con tabs por estado.
 
-export async function renderOCList({ params }) {
+const TABS = [
+  { id: 'pendientes', label: 'Pendientes contador', estados: ['enviada_buzon'] },
+  { id: 'aprobadas',  label: 'Aprobadas',           estados: ['aprobada'] },
+  { id: 'pagadas',    label: 'Pagadas',             estados: ['pagada'] },
+  { id: 'cerradas',   label: 'Cerradas',            estados: ['cerrada'] },
+  { id: 'rechazadas', label: 'Rechazadas',          estados: ['rechazada', 'huerfana'] },
+  { id: 'canceladas', label: 'Canceladas',          estados: ['cancelada'] },
+  { id: 'borradores', label: 'Borradores',          estados: ['borrador'] },
+  { id: 'todas',      label: 'Todas',               estados: null }
+];
+
+export async function renderOCList({ params, query }) {
   const obraId = params.id;
   setState({ obraActual: obraId });
   renderShell(crumbsList(obraId, '...'), h('div', { class: 'empty' }, 'Cargando…'));
@@ -17,22 +28,47 @@ export async function renderOCList({ params }) {
     listOC(obraId)
   ]);
 
-  const ids = Object.keys(ocs);
-  ids.sort((a, b) => (ocs[b].numero || 0) - (ocs[a].numero || 0));
+  const tabId = query?.tab || 'pendientes';
+  const tab = TABS.find(t => t.id === tabId) || TABS[0];
+
+  const allEntries = Object.entries(ocs);
+  const filtered = tab.estados
+    ? allEntries.filter(([, oc]) => tab.estados.includes(oc.estado))
+    : allEntries;
+  filtered.sort((a, b) => (b[1].numero || 0) - (a[1].numero || 0));
 
   const head = h('div', { class: 'row' }, [
     h('h1', {}, 'Órdenes de compra'),
     h('div', { style: { flex: 1 } })
   ]);
 
+  const tabBar = h('div', { class: 'row', style: { marginBottom: '14px', gap: '4px' } },
+    TABS.map(t => {
+      const count = (t.estados
+        ? allEntries.filter(([, oc]) => t.estados.includes(oc.estado))
+        : allEntries).length;
+      return h('button', {
+        class: 'btn sm ' + (t.id === tabId ? 'primary' : 'ghost'),
+        onClick: () => navigate(`/obras/${obraId}/oc?tab=${t.id}`)
+      }, [t.label, ' ', h('span', { class: 'tag muted' }, num0(count))]);
+    }));
+
   let body;
-  if (ids.length === 0) {
-    body = h('div', { class: 'empty' }, [
-      h('div', { class: 'ico' }, '📄'),
-      h('div', {}, 'Sin órdenes de compra todavía.'),
-      h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '8px' } },
-        'Las OC se emiten desde una cotización marcada como recibida.')
-    ]);
+  if (filtered.length === 0) {
+    if (allEntries.length === 0) {
+      body = h('div', { class: 'empty' }, [
+        h('div', { class: 'ico' }, '📄'),
+        h('div', {}, 'Sin órdenes de compra todavía.'),
+        h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '8px' } },
+          'Las OC se emiten desde una cotización marcada como recibida.')
+      ]);
+    } else {
+      body = h('div', { class: 'empty' }, [
+        h('div', {}, `Sin OC en "${tab.label}".`),
+        h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } },
+          `Hay ${allEntries.length} OC en otros estados.`)
+      ]);
+    }
   } else {
     body = h('div', { class: 'card', style: { padding: 0, overflow: 'auto' } }, [
       h('table', { class: 'tbl' }, [
@@ -43,14 +79,14 @@ export async function renderOCList({ params }) {
           h('th', { class: 'num' }, 'Items'),
           h('th', { class: 'num' }, 'Total'),
           h('th', {}, 'Estado'),
-          h('th', {}, 'En contabilidad')
+          h('th', {}, 'Folio contable')
         ])]),
-        h('tbody', {}, ids.map(id => ocRow(obraId, id, ocs[id])))
+        h('tbody', {}, filtered.map(([id, oc]) => ocRow(obraId, id, oc)))
       ])
     ]);
   }
 
-  renderShell(crumbsList(obraId, meta?.nombre), h('div', {}, [head, body]));
+  renderShell(crumbsList(obraId, meta?.nombre), h('div', {}, [head, tabBar, body]));
 }
 
 function ocRow(obraId, ocId, oc) {
@@ -65,26 +101,20 @@ function ocRow(obraId, ocId, oc) {
     h('td', { class: 'num' }, num0(itemsCount)),
     h('td', { class: 'num' }, money(oc.total || 0)),
     h('td', {}, estadoOCBadge(oc.estado)),
-    h('td', {}, estadoBuzonOcBadge(oc))
+    h('td', { class: 'mono', style: { fontSize: '12px' } }, oc.folioContable || '—')
   ]);
 }
 
 export function estadoOCBadge(estado) {
   if (estado === 'borrador')      return h('span', { class: 'tag warn' }, '✎ Borrador');
-  if (estado === 'enviada_buzon') return h('span', { class: 'tag ok' }, '↗ Enviada a contabilidad');
-  if (estado === 'aprobada')      return h('span', { class: 'tag ok' }, '✓ Aprobada por contador');
+  if (estado === 'enviada_buzon') return h('span', { class: 'tag warn' }, '↗ Enviada');
+  if (estado === 'aprobada')      return h('span', { class: 'tag ok' }, '✓ Aprobada');
   if (estado === 'pagada')        return h('span', { class: 'tag ok' }, '💵 Pagada');
   if (estado === 'cerrada')       return h('span', { class: 'tag muted' }, '🔒 Cerrada');
   if (estado === 'rechazada')     return h('span', { class: 'tag danger' }, '✕ Rechazada');
-  if (estado === 'cancelada')     return h('span', { class: 'tag muted' }, '✕ Cancelada');
+  if (estado === 'cancelada')     return h('span', { class: 'tag muted', style: { textDecoration: 'line-through' } }, '✕ Cancelada');
+  if (estado === 'huerfana')      return h('span', { class: 'tag warn' }, '⚠ Huérfana');
   return h('span', { class: 'tag muted' }, estado || '—');
-}
-
-function estadoBuzonOcBadge(oc) {
-  if (!oc.buzonId) return h('span', { class: 'muted' }, '—');
-  // Lectura síncrona del estado: para la tabla mostraríamos el snapshot de
-  // la OC. Para ver el último estado del buzón, el detalle hace getBuzonItem.
-  return h('span', { class: 'muted', style: { fontSize: '12px' } }, oc.buzonId.slice(0, 8));
 }
 
 function crumbsList(obraId, nombre) {
