@@ -9,7 +9,8 @@ import {
   getCotizacion, createCotizacion, updateCotizacion, listCotizaciones,
   createOC, updateOC, listOC,
   pushBuzonItem, setRequisicionOcRef,
-  calcularCoberturaReq
+  calcularCoberturaReq,
+  buildPreciosPorProveedorObra
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num, num0, money, reqFolio } from '../util/format.js';
@@ -33,10 +34,13 @@ export async function renderCotizacionDetalle({ params, query }) {
   const obraId = params.id;
   const cotId = params.cotid || null;
   const reqBuzonId = query?.req || null;
+  // Pre-selección de proveedor (desde la comparativa del inbox).
+  const provIdHint = query?.proveedor || null;
+  const provNombreHint = query?.proveedorNombre || null;
   setState({ obraActual: obraId });
   renderShell(crumbsView(obraId, '...', cotId), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const [meta, catCon, catMat, globales, provObra, existing, reqItem, ocs] = await Promise.all([
+  const [meta, catCon, catMat, globales, provObra, existing, reqItem, ocs, preciosPorProv] = await Promise.all([
     getObraMetaLegacy(obraId),
     loadCatalogoConceptos(obraId),
     loadCatalogoMateriales(obraId),
@@ -44,7 +48,8 @@ export async function renderCotizacionDetalle({ params, query }) {
     listProveedoresObra(obraId),
     cotId ? getCotizacion(obraId, cotId) : null,
     reqBuzonId ? getBuzonItem(reqBuzonId) : null,
-    listOC(obraId)
+    listOC(obraId),
+    buildPreciosPorProveedorObra(obraId)
   ]);
   // Lista combinada: primero proveedores de obra, luego globales no asignados.
   // Identidad: usamos proveedor_global_id si está, si no el id local de obra.
@@ -81,28 +86,65 @@ export async function renderCotizacionDetalle({ params, query }) {
 
     cobertura = calcularCoberturaReq({ ...reqItem, id: reqBuzonId }, ocs);
 
+    // Resolver proveedor sugerido (si llegó hint desde la comparativa del inbox).
+    let provHint = null;
+    if (provIdHint && preciosPorProv.has(provIdHint)) {
+      provHint = preciosPorProv.get(provIdHint);
+    } else if (provNombreHint) {
+      const lower = provNombreHint.toLowerCase();
+      for (const p of preciosPorProv.values()) {
+        if ((p.nombre || '').toLowerCase() === lower) { provHint = p; break; }
+      }
+    }
+
     const seedItems = {};
     for (const [reqItemId, it] of Object.entries(reqItem.items || {})) {
       const cov = cobertura.byMaterial[it.materialKey];
-      // Si ya está totalmente cubierto en otras OC, no sembrar.
       const restante = cov ? cov.restante : (Number(it.cantidad) || 0);
       if (restante <= 0) continue;
       const m = (catMat?.items || {})[it.materialKey];
+      // Precio: si viene hint de proveedor y tiene precio para este material,
+      // usar el último precio cotizado por él. Si no, fallback al catálogo OPUS.
+      let costoUnitario = Number(m?.costoUnitario) || 0;
+      if (provHint?.precios?.[it.materialKey]) {
+        costoUnitario = Number(provHint.precios[it.materialKey].precio) || costoUnitario;
+      }
       seedItems[reqItemId] = {
         materialKey: it.materialKey,
         clave: m?.clave || '',
         descripcion: m?.descripcion || '',
         unidad: m?.unidad || '',
         cantidad: restante,
-        costoUnitario: Number(m?.costoUnitario) || 0,
+        costoUnitario,
         conceptoKey: it.conceptoKey || null,
         origen: m?.origen || 'opus',
         notas: it.notas || ''
       };
     }
+
+    // Pre-seleccionar proveedor si vino hint y existe en la lista
+    let proveedorPrecargado = { id: null, nombre: '', rfc: '', telefono: '', email: '', contacto: '' };
+    if (provHint) {
+      // Buscamos los datos canónicos en la lista de obra o global
+      const provInList = (provObra?.items || []).find(p =>
+        (p.proveedor_global_id || p.id) === provHint.provId
+        || (p.nombre || '').toLowerCase() === (provHint.nombre || '').toLowerCase()
+      );
+      const provInGlobal = globales.find(g => g.id === provHint.provId);
+      const datos = provInGlobal || provInList || {};
+      proveedorPrecargado = {
+        id: provHint.provId || null,
+        nombre: provHint.nombre || datos.nombre || '',
+        rfc: datos.rfc || '',
+        telefono: datos.telefono || '',
+        email: datos.email || '',
+        contacto: ''
+      };
+    }
+
     cot = {
       reqIds: [reqBuzonId],
-      proveedor: { id: null, nombre: '', rfc: '', telefono: '', email: '', contacto: '' },
+      proveedor: proveedorPrecargado,
       fechaCotizacion: Date.now(),
       vigenciaDias: 15,
       items: seedItems,
@@ -110,7 +152,9 @@ export async function renderCotizacionDetalle({ params, query }) {
       ivaPct: 0.16,
       retenciones: [],
       condicionesPago: 'Crédito 30 días',
-      comentarios: '',
+      comentarios: provHint
+        ? `Pre-llenado con precios cotizados anteriormente por ${provHint.nombre}.`
+        : '',
       estado: 'borrador'
     };
   } else {

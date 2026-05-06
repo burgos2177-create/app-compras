@@ -407,6 +407,236 @@ export async function deleteCotizacion(obraId, cotId) {
   return rremove(`obras/${obraId}/cotizaciones/${cotId}`);
 }
 
+// === Sugerencia de proveedores por requisición ===
+//
+// Para cada proveedor de la obra (más cualquier proveedor texto-libre que
+// haya cotizado), construye el set de precios conocidos por materialKey
+// — usando la última cotización vista, fallback a OC si la cotización no
+// tiene el material. Identidad: proveedor_global_id si está, si no nombre
+// lowercase (mismo criterio que matchesProv).
+//
+// Devuelve un Map<id|nombre, { provId, _provObraId?, nombre, precios: {[mk]: {precio, fecha, fuente, cotId|ocId, estado}} }>
+
+export async function buildPreciosPorProveedorObra(obraId) {
+  const [cotizaciones, ocs, provObra] = await Promise.all([
+    listCotizaciones(obraId),
+    listOC(obraId),
+    listProveedoresObra(obraId)
+  ]);
+
+  // Map clave → entrada. La misma entrada puede tener 2 claves (id + nombre).
+  const byKey = new Map();
+  // Set de identidades únicas para deduplicar al final
+  const uniques = new Map();
+
+  function getOrCreate({ id, nombre, provObraRecord }) {
+    const idKey = id || null;
+    const nameKey = (nombre || '').toLowerCase();
+    let entry = (idKey && byKey.get(idKey)) || (nameKey && byKey.get(nameKey));
+    if (entry) return entry;
+    entry = {
+      provId: idKey,
+      _provObraId: provObraRecord?.id || null,
+      nombre: nombre || '(sin nombre)',
+      _adHoc: !provObraRecord,
+      precios: {}
+    };
+    if (idKey) byKey.set(idKey, entry);
+    if (nameKey) byKey.set(nameKey, entry);
+    const dedupKey = idKey || nameKey;
+    if (!uniques.has(dedupKey)) uniques.set(dedupKey, entry);
+    return entry;
+  }
+
+  // Sembramos con los proveedores formales de la obra (aunque no tengan
+  // cotizaciones todavía aparecen en el lookup con precios={}).
+  for (const p of (provObra.items || [])) {
+    getOrCreate({
+      id: p.proveedor_global_id || p.id,
+      nombre: p.nombre,
+      provObraRecord: p
+    });
+  }
+
+  // Cotizaciones — más recientes primero para que ultimoPrecio sea el último visto.
+  const cotEntries = Object.entries(cotizaciones).sort(([, a], [, b]) =>
+    (b.fechaCotizacion || b.createdAt || 0) - (a.fechaCotizacion || a.createdAt || 0));
+  for (const [cotId, c] of cotEntries) {
+    const prov = getOrCreate({
+      id: c.proveedor?.id,
+      nombre: c.proveedor?.nombre
+    });
+    for (const it of Object.values(c.items || {})) {
+      if (!it.materialKey) continue;
+      if (prov.precios[it.materialKey]) continue;
+      prov.precios[it.materialKey] = {
+        precio: Number(it.costoUnitario) || 0,
+        fecha: c.fechaCotizacion || c.createdAt,
+        fuente: 'cotizacion',
+        cotId,
+        estado: c.estado
+      };
+    }
+  }
+
+  // OCs — fallback si la cotización no tenía el material (raro, pero posible
+  // si la OC se editó manualmente).
+  const ocEntries = Object.entries(ocs).sort(([, a], [, b]) =>
+    (b.numero || 0) - (a.numero || 0));
+  for (const [ocId, oc] of ocEntries) {
+    if (oc.estado === 'cancelada' || oc.estado === 'rechazada') continue;
+    const prov = getOrCreate({
+      id: oc.proveedor?.id,
+      nombre: oc.proveedor?.nombre
+    });
+    for (const it of Object.values(oc.items || {})) {
+      if (!it.materialKey) continue;
+      if (prov.precios[it.materialKey]) continue;
+      prov.precios[it.materialKey] = {
+        precio: Number(it.costoUnitario) || 0,
+        fecha: oc.fechaEmision || oc.createdAt,
+        fuente: 'oc',
+        ocId,
+        estado: oc.estado
+      };
+    }
+  }
+
+  return uniques;
+}
+
+// Analiza una requisición contra los precios conocidos de proveedores.
+// reqItem es el item del buzón con tipo='requisicion_materiales'.
+// preciosPorProv es el resultado de buildPreciosPorProveedorObra.
+// materialesCatalogo opcional para mostrar el precio OPUS de comparación.
+//
+// Considera la cobertura ya hecha por OCs anteriores: descuenta cantidades
+// ya cubiertas para evaluar solo lo restante.
+export function analizarReqVsProveedores(reqItem, preciosPorProv, materialesCatalogo, cobertura) {
+  const items = reqItem?.items || {};
+  const reqMateriales = {};   // materialKey → cantidad pendiente
+  for (const it of Object.values(items)) {
+    if (!it.materialKey) continue;
+    reqMateriales[it.materialKey] = (reqMateriales[it.materialKey] || 0) + (Number(it.cantidad) || 0);
+  }
+  // Si hay cobertura previa, descontar
+  if (cobertura?.byMaterial) {
+    for (const mk of Object.keys(reqMateriales)) {
+      const cov = cobertura.byMaterial[mk];
+      if (cov) reqMateriales[mk] = Math.max(0, cov.restante);
+    }
+  }
+
+  // Solo considerar materiales con cantidad > 0 (los completamente cubiertos
+  // ya no necesitan más cotizaciones)
+  const matKeys = Object.keys(reqMateriales).filter(mk => reqMateriales[mk] > 0);
+  const provsArr = Array.from(preciosPorProv.values());
+
+  // Por material: lista de ofertas ordenadas por precio
+  const porMaterial = {};
+  for (const mk of matKeys) {
+    const cantidad = reqMateriales[mk];
+    const ofertas = [];
+    for (const p of provsArr) {
+      const ent = p.precios[mk];
+      if (!ent) continue;
+      ofertas.push({
+        provId: p.provId,
+        nombre: p.nombre,
+        precio: ent.precio,
+        importe: cantidad * ent.precio,
+        fuente: ent.fuente,
+        fecha: ent.fecha,
+        estado: ent.estado
+      });
+    }
+    ofertas.sort((a, b) => a.precio - b.precio);
+    porMaterial[mk] = {
+      cantidad,
+      precioCatalogo: Number(materialesCatalogo?.[mk]?.costoUnitario) || 0,
+      ofertas,
+      mejor: ofertas[0] || null
+    };
+  }
+
+  // "Todo a un proveedor": para cada proveedor, qué cubre y costo
+  const todoAUno = [];
+  for (const p of provsArr) {
+    if (matKeys.length === 0) break;
+    let cubre = 0, totalProv = 0;
+    const itemsCubre = [], itemsFalta = [];
+    for (const mk of matKeys) {
+      const cantidad = reqMateriales[mk];
+      const ent = p.precios[mk];
+      if (ent) {
+        cubre++;
+        totalProv += cantidad * ent.precio;
+        itemsCubre.push({ materialKey: mk, cantidad, precio: ent.precio, importe: cantidad * ent.precio });
+      } else {
+        itemsFalta.push(mk);
+      }
+    }
+    if (cubre > 0) {
+      todoAUno.push({
+        provId: p.provId,
+        nombre: p.nombre,
+        cubre,
+        totalMateriales: matKeys.length,
+        pctCobertura: cubre / matKeys.length,
+        completo: cubre === matKeys.length,
+        total: totalProv,
+        itemsCubre,
+        itemsFalta
+      });
+    }
+  }
+  // Ordenar: completos primero, luego por mayor cobertura, luego por menor total
+  todoAUno.sort((a, b) => {
+    if (a.completo !== b.completo) return a.completo ? -1 : 1;
+    if (b.cubre !== a.cubre) return b.cubre - a.cubre;
+    return a.total - b.total;
+  });
+
+  // Combinación óptima: para cada material elegir el proveedor más barato
+  let optimoTotal = 0;
+  const optimoCombinacion = [];
+  const optimoFaltantes = [];
+  for (const mk of matKeys) {
+    const r = porMaterial[mk];
+    if (r.mejor) {
+      optimoTotal += r.mejor.importe;
+      optimoCombinacion.push({
+        materialKey: mk,
+        cantidad: r.cantidad,
+        provId: r.mejor.provId,
+        nombreProv: r.mejor.nombre,
+        precio: r.mejor.precio,
+        importe: r.mejor.importe
+      });
+    } else {
+      optimoFaltantes.push(mk);
+    }
+  }
+  const optimoPorProv = {};
+  for (const it of optimoCombinacion) {
+    const k = it.provId || (it.nombreProv || '').toLowerCase();
+    if (!optimoPorProv[k]) optimoPorProv[k] = { provId: it.provId, nombre: it.nombreProv, items: [], total: 0 };
+    optimoPorProv[k].items.push(it);
+    optimoPorProv[k].total += it.importe;
+  }
+
+  return {
+    matKeys, reqMateriales, porMaterial,
+    todoAUno,
+    optimo: {
+      total: optimoTotal,
+      combinacion: optimoCombinacion,
+      faltantes: optimoFaltantes,
+      porProveedor: Object.values(optimoPorProv).sort((a, b) => b.total - a.total)
+    }
+  };
+}
+
 // === Cobertura de requisición ===
 //
 // Una requisición se puede satisfacer con varias cotizaciones/OC (de uno o
