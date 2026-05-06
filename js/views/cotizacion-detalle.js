@@ -4,7 +4,7 @@ import { state, setState } from '../state/store.js';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
-  listProveedoresGlobal,
+  listProveedoresGlobal, listProveedoresObra,
   getBuzonItem, updateBuzonItem,
   getCotizacion, createCotizacion, updateCotizacion, listCotizaciones,
   createOC, updateOC, listOC,
@@ -36,15 +36,27 @@ export async function renderCotizacionDetalle({ params, query }) {
   setState({ obraActual: obraId });
   renderShell(crumbsView(obraId, '...', cotId), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const [meta, catCon, catMat, proveedores, existing, reqItem, ocs] = await Promise.all([
+  const [meta, catCon, catMat, globales, provObra, existing, reqItem, ocs] = await Promise.all([
     getObraMetaLegacy(obraId),
     loadCatalogoConceptos(obraId),
     loadCatalogoMateriales(obraId),
     listProveedoresGlobal(),
+    listProveedoresObra(obraId),
     cotId ? getCotizacion(obraId, cotId) : null,
     reqBuzonId ? getBuzonItem(reqBuzonId) : null,
     listOC(obraId)
   ]);
+  // Lista combinada: primero proveedores de obra, luego globales no asignados.
+  // Identidad: usamos proveedor_global_id si está, si no el id local de obra.
+  const obraProvs = (provObra?.items || []).map(p => ({
+    id: p.proveedor_global_id || p.id,
+    nombre: p.nombre, rfc: p.rfc, telefono: p.telefono, email: p.email,
+    _scope: 'obra'
+  }));
+  const obraIds = new Set(obraProvs.map(p => p.id));
+  const globalesNoEnObra = globales.filter(g => !obraIds.has(g.id))
+    .map(g => ({ ...g, _scope: 'global' }));
+  const proveedores = [...obraProvs, ...globalesNoEnObra];
 
   setState({ conceptos: catCon?.conceptos || null, materiales: catMat?.items || null });
 
@@ -126,11 +138,18 @@ function renderEditor(ctx) {
   const totalesCardRef = { node: null };  // se llena al renderizar
 
   // === Datos card ===
-  const provSelect = h('select', {},
-    [h('option', { value: '' }, '— elige proveedor —')]
-      .concat([...proveedores].sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '')).map(p =>
-        h('option', { value: p.id, selected: cot.proveedor?.id === p.id }, p.nombre)))
-  );
+  // Dropdown con optgroups: "Proveedores de esta obra" y "Catálogo global".
+  // Si la obra no tiene proveedores, solo aparece el grupo global.
+  const sortByName = (a, b) => (a.nombre || '').localeCompare(b.nombre || '');
+  const obraGroup = proveedores.filter(p => p._scope === 'obra').sort(sortByName);
+  const globalGroup = proveedores.filter(p => p._scope === 'global').sort(sortByName);
+  const provSelect = h('select', {}, [
+    h('option', { value: '' }, '— elige proveedor —'),
+    obraGroup.length > 0 && h('optgroup', { label: 'Proveedores de esta obra' },
+      obraGroup.map(p => h('option', { value: p.id, selected: cot.proveedor?.id === p.id }, p.nombre))),
+    globalGroup.length > 0 && h('optgroup', { label: 'Catálogo global (no asignados a esta obra)' },
+      globalGroup.map(p => h('option', { value: p.id, selected: cot.proveedor?.id === p.id }, p.nombre)))
+  ]);
   provSelect.addEventListener('change', () => {
     const p = proveedores.find(x => x.id === provSelect.value);
     if (p) {

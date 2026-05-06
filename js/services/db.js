@@ -191,6 +191,124 @@ export async function deleteProveedorGlobal(provId) {
   return true;
 }
 
+// === Proveedores por obra (sogrub_proy_proveedores) ===
+//
+// Bitácora maneja la relación proveedor↔proyecto en /legacy/bitacora/sogrub_proy_proveedores
+// como ARRAY de { id, proyecto_id, nombre, proveedor_global_id?, rfc?, ...}.
+// Compras escribe el mismo path para mantener consistencia. La traducción
+// obraId → proyectoId pasa por /shared/obraLinks (mismo patrón que bitácora).
+
+export async function getProyectoIdByObraId(obraId) {
+  if (!obraId) return null;
+  return await rread(`/shared/obraLinks/${obraId}`);
+}
+
+export async function listProveedoresProy(proyectoId) {
+  const all = await rread('/legacy/bitacora/sogrub_proy_proveedores');
+  if (!Array.isArray(all)) return [];
+  return all.filter(p => p && p.proyecto_id === proyectoId);
+}
+
+// Lista por obra resolviendo el proyecto contable. Devuelve [] si la obra no
+// está vinculada a ningún proyecto (común al inicio).
+export async function listProveedoresObra(obraId) {
+  const proyectoId = await getProyectoIdByObraId(obraId);
+  if (!proyectoId) return { proyectoId: null, items: [] };
+  const items = await listProveedoresProy(proyectoId);
+  return { proyectoId, items };
+}
+
+async function _saveProyProveedoresArray(arr) {
+  await rset('/legacy/bitacora/sogrub_proy_proveedores', arr);
+}
+
+export async function addProveedorAObra(obraId, data) {
+  const proyectoId = await getProyectoIdByObraId(obraId);
+  if (!proyectoId) throw new Error('Esta obra no está vinculada a un proyecto contable');
+  const all = (await rread('/legacy/bitacora/sogrub_proy_proveedores')) || [];
+  const arr = Array.isArray(all) ? [...all] : [];
+  const id = crypto.randomUUID();
+  const item = {
+    id,
+    proyecto_id: proyectoId,
+    nombre: data.nombre,
+    rfc: data.rfc || '',
+    telefono: data.telefono || '',
+    email: data.email || '',
+    contacto: data.contacto || '',
+    notas: data.notas || '',
+    proveedor_global_id: data.proveedor_global_id || null,
+    creadoAt: Date.now(),
+    creadoPorApp: 'compras'
+  };
+  arr.push(item);
+  await _saveProyProveedoresArray(arr);
+  return item;
+}
+
+export async function updateProveedorObra(provObraId, patch) {
+  const all = (await rread('/legacy/bitacora/sogrub_proy_proveedores')) || [];
+  const arr = Array.isArray(all) ? [...all] : [];
+  const idx = arr.findIndex(p => p.id === provObraId);
+  if (idx === -1) throw new Error('Proveedor de obra no encontrado');
+  arr[idx] = { ...arr[idx], ...patch, actualizadoAt: Date.now() };
+  await _saveProyProveedoresArray(arr);
+  return arr[idx];
+}
+
+export async function removeProveedorObra(provObraId) {
+  const all = (await rread('/legacy/bitacora/sogrub_proy_proveedores')) || [];
+  const arr = Array.isArray(all) ? [...all] : [];
+  const filtered = arr.filter(p => p.id !== provObraId);
+  if (filtered.length === arr.length) return false;
+  await _saveProyProveedoresArray(filtered);
+  return true;
+}
+
+export async function getProveedorObra(provObraId) {
+  const all = await rread('/legacy/bitacora/sogrub_proy_proveedores');
+  if (!Array.isArray(all)) return null;
+  return all.find(p => p.id === provObraId) || null;
+}
+
+// Importar uno o varios proveedores globales como proveedores de obra.
+// Si un proveedor global ya está vinculado a la obra (mismo proveedor_global_id
+// o mismo nombre), se omite para evitar duplicados.
+export async function importarProveedoresGlobales(obraId, globalIds) {
+  const proyectoId = await getProyectoIdByObraId(obraId);
+  if (!proyectoId) throw new Error('Esta obra no está vinculada a un proyecto contable');
+  const globales = await listProveedoresGlobal();
+  const all = (await rread('/legacy/bitacora/sogrub_proy_proveedores')) || [];
+  const arr = Array.isArray(all) ? [...all] : [];
+  const yaEnProy = new Set(arr
+    .filter(p => p.proyecto_id === proyectoId)
+    .map(p => p.proveedor_global_id || p.nombre));
+
+  const importados = [];
+  for (const gid of globalIds) {
+    const g = globales.find(x => x.id === gid);
+    if (!g) continue;
+    if (yaEnProy.has(g.id) || yaEnProy.has(g.nombre)) continue;
+    const item = {
+      id: crypto.randomUUID(),
+      proyecto_id: proyectoId,
+      proveedor_global_id: g.id,
+      nombre: g.nombre,
+      rfc: g.rfc || '',
+      telefono: g.telefono || '',
+      email: g.email || '',
+      contacto: '',
+      notas: g.notas || '',
+      creadoAt: Date.now(),
+      creadoPorApp: 'compras'
+    };
+    arr.push(item);
+    importados.push(item);
+  }
+  if (importados.length > 0) await _saveProyProveedoresArray(arr);
+  return importados;
+}
+
 // === Material ad-hoc creado desde compras ===
 //
 // Decisión 5: items ad-hoc se diferencian por origen. Compras puede crear
