@@ -271,6 +271,44 @@ export async function getProveedorObra(provObraId) {
   return all.find(p => p.id === provObraId) || null;
 }
 
+// Merge proveedor de obra + catálogo global. Si el proveedor de obra está
+// vinculado al global (proveedor_global_id), los datos canónicos
+// (nombre, RFC, teléfono, email) salen del global — el catálogo global es
+// la fuente de verdad para identidad fiscal y contacto principal.
+// Los campos `contacto` y `notas` pueden ser overrides locales (específicos
+// de la obra); si están vacíos, también se cae al global.
+//
+// Estructura resultante:
+//   { ...provObra, nombre, rfc, telefono, email, contacto, notas,
+//     _fuenteCanonica: 'global' | 'obra',
+//     _global: <objeto del global o null> }
+export function mergeProveedorObraConGlobal(provObra, globales) {
+  if (!provObra) return null;
+  const g = provObra.proveedor_global_id
+    ? (globales || []).find(x => x.id === provObra.proveedor_global_id)
+    : null;
+  if (!g) {
+    return { ...provObra, _fuenteCanonica: 'obra', _global: null };
+  }
+  // Override solo si la obra tiene valor no vacío. Para campos canónicos
+  // (nombre/rfc/telefono/email) preferimos el global SIEMPRE — si la obra
+  // tiene snapshot viejo distinto, lo ignoramos para no mostrar datos stale.
+  const pickGlobal = (key) => g[key] || provObra[key] || '';
+  // Para contacto/notas, lo de la obra gana si está; si no, fallback al global.
+  const pickObraFirst = (key) => provObra[key] || g[key] || '';
+  return {
+    ...provObra,
+    nombre:   g.nombre || provObra.nombre,
+    rfc:      pickGlobal('rfc'),
+    telefono: pickGlobal('telefono'),
+    email:    pickGlobal('email'),
+    contacto: pickObraFirst('contacto'),
+    notas:    pickObraFirst('notas'),
+    _fuenteCanonica: 'global',
+    _global: g
+  };
+}
+
 // Importar uno o varios proveedores globales como proveedores de obra.
 // Si un proveedor global ya está vinculado a la obra (mismo proveedor_global_id
 // o mismo nombre), se omite para evitar duplicados.

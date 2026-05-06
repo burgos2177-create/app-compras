@@ -4,7 +4,9 @@ import { state, setState } from '../state/store.js';
 import {
   getObraMetaLegacy, getProveedorObra, updateProveedorObra,
   loadCatalogoMateriales, loadCatalogoConceptos,
-  listCotizaciones, listOC
+  listCotizaciones, listOC,
+  listProveedoresGlobal, updateProveedorGlobal,
+  mergeProveedorObraConGlobal
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js';
@@ -30,20 +32,25 @@ export async function renderProveedorObraDetalle({ params }) {
   setState({ obraActual: obraId });
   renderShell(crumbs(obraId, '...', '...'), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const [meta, prov, catMat, catCon, cotizaciones, ocs] = await Promise.all([
+  const [meta, provRaw, catMat, catCon, cotizaciones, ocs, globales] = await Promise.all([
     getObraMetaLegacy(obraId),
     getProveedorObra(provObraId),
     loadCatalogoMateriales(obraId),
     loadCatalogoConceptos(obraId),
     listCotizaciones(obraId),
-    listOC(obraId)
+    listOC(obraId),
+    listProveedoresGlobal()
   ]);
 
-  if (!prov) {
+  if (!provRaw) {
     renderShell(crumbs(obraId, meta?.nombre, '...'),
       h('div', { class: 'empty' }, 'Proveedor no encontrado en esta obra.'));
     return;
   }
+  // Merge con catálogo global: si está vinculado, los datos canónicos
+  // (RFC, teléfono, email) salen del global. _global queda disponible para
+  // edición.
+  const prov = mergeProveedorObraConGlobal(provRaw, globales);
 
   const materiales = catMat?.items || {};
 
@@ -94,6 +101,7 @@ export async function renderProveedorObraDetalle({ params }) {
     h('button', { class: 'btn ghost', onClick: () => onEditar(obraId, prov) }, '✎ Editar datos')
   ]);
 
+  const linkedToGlobal = prov._fuenteCanonica === 'global';
   const datosCard = h('div', { class: 'card' }, [
     h('h3', {}, 'Datos del proveedor'),
     h('div', { class: 'grid-3' }, [
@@ -103,14 +111,16 @@ export async function renderProveedorObraDetalle({ params }) {
       kv('Email', prov.email),
       kv('Contacto', prov.contacto),
       kv('Origen',
-        prov.proveedor_global_id
+        linkedToGlobal
           ? h('span', { class: 'tag' }, 'En catálogo global')
           : h('span', { class: 'tag warn' }, 'Solo en obra'))
     ]),
     prov.notas && h('div', { style: { marginTop: '8px' } }, [
       h('label', { class: 'muted', style: { fontSize: '12px' } }, 'Notas'),
       h('div', {}, prov.notas)
-    ])
+    ]),
+    linkedToGlobal && h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '10px' } },
+      'Nombre, RFC, teléfono y email vienen del catálogo global. Contacto y notas pueden ser específicos de esta obra.')
   ]);
 
   const kpisCard = h('div', { class: 'grid-4' }, [
@@ -309,43 +319,93 @@ function renderCotizacionesCard(obraId, cotsProv, ocsProv) {
 }
 
 async function onEditar(obraId, prov) {
+  const linkedToGlobal = prov._fuenteCanonica === 'global';
+
+  // Inputs para datos canónicos (global) y para overrides locales (obra).
   const nombre   = h('input', { value: prov.nombre || '', autofocus: true });
   const rfc      = h('input', { value: prov.rfc || '' });
   const telefono = h('input', { value: prov.telefono || '' });
   const email    = h('input', { type: 'email', value: prov.email || '' });
-  const contacto = h('input', { value: prov.contacto || '' });
+  // Contacto y notas: si está vinculado al global, lo que se edita es el
+  // override de obra (no se toca el global). Si no está vinculado, se edita
+  // todo localmente.
+  const contacto = h('input', { value: prov._global ? (prov._fuenteCanonica === 'global' ? (prov.contacto || '') : prov.contacto) : (prov.contacto || '') });
   const notas    = h('textarea', { rows: 2 }, prov.notas || '');
 
-  await modal({
-    title: 'Editar proveedor (en esta obra)',
-    body: h('div', {}, [
-      h('div', { class: 'field' }, [h('label', {}, 'Nombre *'), nombre]),
-      h('div', { class: 'grid-2' }, [
-        h('div', { class: 'field' }, [h('label', {}, 'RFC'), rfc]),
-        h('div', { class: 'field' }, [h('label', {}, 'Teléfono'), telefono])
-      ]),
-      h('div', { class: 'grid-2' }, [
-        h('div', { class: 'field' }, [h('label', {}, 'Email'), email]),
-        h('div', { class: 'field' }, [h('label', {}, 'Contacto'), contacto])
-      ]),
-      h('div', { class: 'field' }, [h('label', {}, 'Notas'), notas]),
-      prov.proveedor_global_id && h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } },
-        'Esta edición solo afecta los datos del proveedor en esta obra. El catálogo global no se modifica.')
+  if (linkedToGlobal) {
+    // Datos canónicos vienen del global. El modal los muestra solo lectura
+    // a menos que el usuario diga "Editar en catálogo global".
+    nombre.disabled = true; rfc.disabled = true;
+    telefono.disabled = true; email.disabled = true;
+  }
+
+  const editarGlobalToggle = h('input', { type: 'checkbox' });
+  editarGlobalToggle.addEventListener('change', () => {
+    const lock = !editarGlobalToggle.checked;
+    nombre.disabled = lock; rfc.disabled = lock;
+    telefono.disabled = lock; email.disabled = lock;
+  });
+
+  const body = h('div', {}, [
+    linkedToGlobal && h('div', { style: { padding: '8px 10px', background: 'var(--bg-2)', borderRadius: '6px', marginBottom: '12px', fontSize: '12px' } }, [
+      h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer' } }, [
+        editarGlobalToggle,
+        h('span', {}, h('b', {}, 'Editar también en el catálogo global')),
+        h('span', { class: 'muted' }, ' (afecta a todas las obras donde se use este proveedor)')
+      ])
     ]),
-    confirmLabel: 'Guardar',
+    h('div', { class: 'field' }, [h('label', {}, 'Nombre *'), nombre]),
+    h('div', { class: 'grid-2' }, [
+      h('div', { class: 'field' }, [h('label', {}, 'RFC'), rfc]),
+      h('div', { class: 'field' }, [h('label', {}, 'Teléfono'), telefono])
+    ]),
+    h('div', { class: 'grid-2' }, [
+      h('div', { class: 'field' }, [h('label', {}, 'Email'), email]),
+      h('div', { class: 'field' }, [h('label', {}, 'Contacto (override de obra)'), contacto])
+    ]),
+    h('div', { class: 'field' }, [h('label', {}, 'Notas (override de obra)'), notas]),
+    linkedToGlobal && h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } },
+      'Por defecto solo se actualiza contacto y notas en esta obra. Marca el checkbox para también actualizar nombre/RFC/teléfono/email en el catálogo global.')
+  ]);
+
+  await modal({
+    title: 'Editar proveedor',
+    body, confirmLabel: 'Guardar', size: 'lg',
     onConfirm: async () => {
       const n = nombre.value.trim();
       if (!n) { toast('Captura el nombre', 'danger'); return false; }
       try {
-        await updateProveedorObra(prov.id, {
+        const datosCanonicos = {
           nombre: n,
           rfc: rfc.value.trim(),
           telefono: telefono.value.trim(),
-          email: email.value.trim(),
+          email: email.value.trim()
+        };
+        const datosObra = {
           contacto: contacto.value.trim(),
           notas: notas.value.trim()
-        });
-        toast('Proveedor actualizado', 'ok');
+        };
+
+        if (linkedToGlobal && editarGlobalToggle.checked) {
+          // Actualizar global y limpiar snapshot de obra para que siempre
+          // se lea del global (evita stale).
+          await updateProveedorGlobal(prov.proveedor_global_id, datosCanonicos);
+          await updateProveedorObra(prov.id, {
+            ...datosObra,
+            // Limpiamos el snapshot de obra para canónicos — el merge ya los
+            // toma del global.
+            nombre: '', rfc: '', telefono: '', email: ''
+          });
+          toast('Proveedor actualizado en obra y catálogo global', 'ok');
+        } else if (linkedToGlobal) {
+          // Solo override de obra (contacto + notas).
+          await updateProveedorObra(prov.id, datosObra);
+          toast('Datos de la obra actualizados', 'ok');
+        } else {
+          // Proveedor solo de obra: actualizar todo localmente.
+          await updateProveedorObra(prov.id, { ...datosCanonicos, ...datosObra });
+          toast('Proveedor actualizado', 'ok');
+        }
         renderProveedorObraDetalle({ params: { id: obraId, provid: prov.id } });
         return true;
       } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }

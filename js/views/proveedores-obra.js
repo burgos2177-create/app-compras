@@ -6,7 +6,8 @@ import {
   listProveedoresObra, addProveedorAObra, removeProveedorObra,
   importarProveedoresGlobales,
   listProveedoresGlobal, addProveedorGlobal,
-  listCotizaciones, getProyectoIdByObraId
+  listCotizaciones, getProyectoIdByObraId,
+  mergeProveedorObraConGlobal
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num0, money } from '../util/format.js';
@@ -68,7 +69,10 @@ export async function renderProveedoresObra({ params }) {
         'Importa del catálogo global o crea uno nuevo solo para esta obra.')
     ]);
   } else {
-    const sorted = [...items].sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    // Merge cada proveedor con el global para mostrar siempre los datos
+    // canónicos vigentes (RFC, teléfono, email del global cuando existe).
+    const merged = items.map(p => mergeProveedorObraConGlobal(p, globales));
+    const sorted = merged.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
     body = h('div', { class: 'card', style: { padding: 0 } }, [
       h('table', { class: 'tbl' }, [
         h('thead', {}, [h('tr', {}, [
