@@ -113,7 +113,11 @@ export async function renderProveedorObraDetalle({ params }) {
       kv('Origen',
         linkedToGlobal
           ? h('span', { class: 'tag' }, 'En catálogo global')
-          : h('span', { class: 'tag warn' }, 'Solo en obra'))
+          : h('span', { class: 'tag warn' }, 'Solo en obra')),
+      kv('Régimen fiscal',
+        prov.aceptaSinIva
+          ? h('span', { class: 'tag ok' }, '✓ Acepta sin IVA')
+          : h('span', { class: 'tag warn' }, '⚠ Siempre con IVA (+ 16%)'))
     ]),
     prov.notas && h('div', { style: { marginTop: '8px' } }, [
       h('label', { class: 'muted', style: { fontSize: '12px' } }, 'Notas'),
@@ -331,6 +335,7 @@ async function onEditar(obraId, prov) {
   // todo localmente.
   const contacto = h('input', { value: prov._global ? (prov._fuenteCanonica === 'global' ? (prov.contacto || '') : prov.contacto) : (prov.contacto || '') });
   const notas    = h('textarea', { rows: 2 }, prov.notas || '');
+  const aceptaSinIva = h('input', { type: 'checkbox', checked: prov.aceptaSinIva !== false });
 
   if (linkedToGlobal) {
     // Datos canónicos vienen del global. El modal los muestra solo lectura
@@ -364,8 +369,16 @@ async function onEditar(obraId, prov) {
       h('div', { class: 'field' }, [h('label', {}, 'Contacto (override de obra)'), contacto])
     ]),
     h('div', { class: 'field' }, [h('label', {}, 'Notas (override de obra)'), notas]),
+    h('div', { style: { padding: '10px 12px', background: 'var(--bg-2)', borderRadius: '6px', marginTop: '10px' } }, [
+      h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer' } }, [
+        aceptaSinIva,
+        h('span', {}, h('b', {}, 'Acepta transacciones sin IVA'))
+      ]),
+      h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
+        'Si está marcado, sus precios se comparan contra el catálogo OPUS directo. Si no, se comparan contra OPUS + 16% IVA (porque el proveedor solo vende facturado).')
+    ]),
     linkedToGlobal && h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } },
-      'Por defecto solo se actualiza contacto y notas en esta obra. Marca el checkbox para también actualizar nombre/RFC/teléfono/email en el catálogo global.')
+      'Por defecto solo se actualiza contacto, notas y régimen fiscal en esta obra. Marca el checkbox para también actualizar nombre/RFC/teléfono/email en el catálogo global.')
   ]);
 
   await modal({
@@ -383,7 +396,8 @@ async function onEditar(obraId, prov) {
         };
         const datosObra = {
           contacto: contacto.value.trim(),
-          notas: notas.value.trim()
+          notas: notas.value.trim(),
+          aceptaSinIva: aceptaSinIva.checked
         };
 
         if (linkedToGlobal && editarGlobalToggle.checked) {

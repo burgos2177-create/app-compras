@@ -237,6 +237,11 @@ export async function addProveedorAObra(obraId, data) {
     email: data.email || '',
     contacto: data.contacto || '',
     notas: data.notas || '',
+    // Régimen fiscal: si el proveedor acepta vender sin factura (sin IVA),
+    // sus precios se comparan directo contra el catálogo OPUS. Si no
+    // (Home Depot, etc.), sus precios YA incluyen IVA y se comparan contra
+    // catálogo OPUS × 1.16. Default true para backward compat.
+    aceptaSinIva: data.aceptaSinIva !== false,
     proveedor_global_id: data.proveedor_global_id || null,
     creadoAt: Date.now(),
     creadoPorApp: 'compras'
@@ -284,17 +289,21 @@ export async function getProveedorObra(provObraId) {
 //     _global: <objeto del global o null> }
 export function mergeProveedorObraConGlobal(provObra, globales) {
   if (!provObra) return null;
+  // Régimen fiscal: si la obra tiene la propiedad definida, gana lo de obra
+  // (puede variar por relación comercial). Si no, fallback al global. Si
+  // ningún lado lo tiene, default true (acepta sin IVA — backward compat).
+  const resolveAceptaSinIva = (g) => {
+    if (typeof provObra.aceptaSinIva === 'boolean') return provObra.aceptaSinIva;
+    if (g && typeof g.aceptaSinIva === 'boolean') return g.aceptaSinIva;
+    return true;
+  };
   const g = provObra.proveedor_global_id
     ? (globales || []).find(x => x.id === provObra.proveedor_global_id)
     : null;
   if (!g) {
-    return { ...provObra, _fuenteCanonica: 'obra', _global: null };
+    return { ...provObra, aceptaSinIva: resolveAceptaSinIva(null), _fuenteCanonica: 'obra', _global: null };
   }
-  // Override solo si la obra tiene valor no vacío. Para campos canónicos
-  // (nombre/rfc/telefono/email) preferimos el global SIEMPRE — si la obra
-  // tiene snapshot viejo distinto, lo ignoramos para no mostrar datos stale.
   const pickGlobal = (key) => g[key] || provObra[key] || '';
-  // Para contacto/notas, lo de la obra gana si está; si no, fallback al global.
   const pickObraFirst = (key) => provObra[key] || g[key] || '';
   return {
     ...provObra,
@@ -304,6 +313,7 @@ export function mergeProveedorObraConGlobal(provObra, globales) {
     email:    pickGlobal('email'),
     contacto: pickObraFirst('contacto'),
     notas:    pickObraFirst('notas'),
+    aceptaSinIva: resolveAceptaSinIva(g),
     _fuenteCanonica: 'global',
     _global: g
   };

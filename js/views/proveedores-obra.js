@@ -201,6 +201,7 @@ async function onNuevo(obraId) {
   const email    = h('input', { type: 'email' });
   const contacto = h('input', { placeholder: 'Persona de contacto' });
   const notas    = h('textarea', { rows: 2, placeholder: 'Familias que maneja, condiciones de pago, etc.' });
+  const aceptaSinIva = h('input', { type: 'checkbox', checked: true });
   const tambienGlobal = h('input', { type: 'checkbox', checked: true });
 
   await modal({
@@ -216,6 +217,15 @@ async function onNuevo(obraId) {
         h('div', { class: 'field' }, [h('label', {}, 'Contacto'), contacto])
       ]),
       h('div', { class: 'field' }, [h('label', {}, 'Notas'), notas]),
+      h('div', { style: { padding: '10px 12px', background: 'var(--bg-2)', borderRadius: '6px', marginTop: '8px' } }, [
+        h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer' } }, [
+          aceptaSinIva,
+          h('span', {}, h('b', {}, 'Acepta transacciones sin IVA')),
+          h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '6px' } }, '(default)')
+        ]),
+        h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
+          'Desmarca si el proveedor SIEMPRE emite factura (Home Depot, casas que venden al público en general). Sus precios se compararán contra catálogo OPUS + IVA, no contra OPUS directo.')
+      ]),
       h('label', { class: 'row', style: { gap: '6px', marginTop: '8px' } }, [
         tambienGlobal,
         h('span', {}, 'Agregar también al catálogo global'),
@@ -233,7 +243,8 @@ async function onNuevo(obraId) {
         telefono: telefono.value.trim(),
         email: email.value.trim(),
         contacto: contacto.value.trim(),
-        notas: notas.value.trim()
+        notas: notas.value.trim(),
+        aceptaSinIva: aceptaSinIva.checked
       };
       try {
         if (tambienGlobal.checked) {
