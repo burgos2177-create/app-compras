@@ -63,7 +63,8 @@ export async function renderObra({ params }) {
   ]);
 
   const numProvs = (provObra?.items || []).length;
-  const tilesCard = h('div', { class: 'grid-2', style: { marginTop: '14px' } }, [
+  const numMaterialesCatalogo = catMat?.items ? Object.keys(catMat.items).length : 0;
+  const tilesCard = h('div', { class: 'grid-3', style: { marginTop: '14px' } }, [
     tileCard('Inbox de requisiciones',
       Object.keys(reqsPendientes).length, 'pendientes',
       `/obras/${obraId}/inbox`,
@@ -72,6 +73,10 @@ export async function renderObra({ params }) {
       numProvs, numProvs === 1 ? 'asignado' : 'asignados',
       `/obras/${obraId}/proveedores`,
       'Proveedores que trabajan en esta obra. Catálogo vs cotizado.'),
+    tileCard('Catálogo de precios',
+      numMaterialesCatalogo, 'materiales',
+      `/obras/${obraId}/catalogo-precios`,
+      'Captura precios por proveedor antes de que lleguen requisiciones.'),
     tileCard('Cotizaciones',
       numCotizaciones, 'totales',
       `/obras/${obraId}/cotizaciones`,

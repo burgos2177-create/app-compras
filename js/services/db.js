@@ -407,6 +407,53 @@ export async function deleteCotizacion(obraId, cotId) {
   return rremove(`obras/${obraId}/cotizaciones/${cotId}`);
 }
 
+// === Catálogo de precios pre-cotización ===
+//
+// Path: /shared/compras/obras/{obraId}/preciosCatalogo/{provId}/{materialKey}
+//
+// Mecanismo para capturar precios de proveedor por material ANTES de que
+// llegue una requisición — sirve para tener un "catálogo de precios" listo
+// y deliberar rápido cuando llegan pedidos. Cada entrada:
+//   { precio, fecha, capturadoPor, notas?, disponible? }
+//
+// disponible=false marca explícitamente que el proveedor NO maneja ese
+// material (útil para distinguir "no lo tiene" de "no he preguntado").
+
+export async function listPreciosCatalogo(obraId) {
+  return (await rread(`obras/${obraId}/preciosCatalogo`)) || {};
+}
+
+export async function listPreciosCatalogoProveedor(obraId, provId) {
+  return (await rread(`obras/${obraId}/preciosCatalogo/${provId}`)) || {};
+}
+
+export async function setPrecioCatalogo(obraId, provId, materialKey, data) {
+  return rset(`obras/${obraId}/preciosCatalogo/${provId}/${materialKey}`, {
+    ...data,
+    fecha: data.fecha || Date.now()
+  });
+}
+
+export async function removePrecioCatalogo(obraId, provId, materialKey) {
+  return rremove(`obras/${obraId}/preciosCatalogo/${provId}/${materialKey}`);
+}
+
+// Bulk: para una matriz capturada en la vista catálogo-precios, sube los
+// cambios. `updates` es un array de { provId, materialKey, data | null }
+// (null = remover).
+export async function bulkSavePreciosCatalogo(obraId, updates, autor) {
+  await Promise.all(updates.map(u => {
+    if (u.data === null) {
+      return rremove(`obras/${obraId}/preciosCatalogo/${u.provId}/${u.materialKey}`);
+    }
+    return rset(`obras/${obraId}/preciosCatalogo/${u.provId}/${u.materialKey}`, {
+      ...u.data,
+      capturadoPor: u.data.capturadoPor || autor || null,
+      fecha: u.data.fecha || Date.now()
+    });
+  }));
+}
+
 // === Sugerencia de proveedores por requisición ===
 //
 // Para cada proveedor de la obra (más cualquier proveedor texto-libre que
@@ -418,10 +465,11 @@ export async function deleteCotizacion(obraId, cotId) {
 // Devuelve un Map<id|nombre, { provId, _provObraId?, nombre, precios: {[mk]: {precio, fecha, fuente, cotId|ocId, estado}} }>
 
 export async function buildPreciosPorProveedorObra(obraId) {
-  const [cotizaciones, ocs, provObra] = await Promise.all([
+  const [cotizaciones, ocs, provObra, preciosCat] = await Promise.all([
     listCotizaciones(obraId),
     listOC(obraId),
-    listProveedoresObra(obraId)
+    listProveedoresObra(obraId),
+    listPreciosCatalogo(obraId)
   ]);
 
   // Map clave → entrada. La misma entrada puede tener 2 claves (id + nombre).
@@ -498,6 +546,34 @@ export async function buildPreciosPorProveedorObra(obraId) {
         fuente: 'oc',
         ocId,
         estado: oc.estado
+      };
+    }
+  }
+
+  // Catálogo de precios pre-cotización: fallback final para proveedores que
+  // todavía no han cotizado formalmente pero sí tienen precio capturado en
+  // /preciosCatalogo. La identidad de proveedor aquí es el provId (no nombre)
+  // porque la vista de catálogo-precios siempre captura contra un proveedor
+  // de la lista de obra (que tiene id).
+  for (const [provId, mats] of Object.entries(preciosCat || {})) {
+    if (!mats || typeof mats !== 'object') continue;
+    const prov = getOrCreate({ id: provId, nombre: null });
+    if (!prov) continue;
+    // Si no encontró nombre, intenta hallarlo en la lista de obra
+    if (!prov.nombre || prov.nombre === '(sin nombre)') {
+      const p = (provObra.items || []).find(p => (p.proveedor_global_id || p.id) === provId);
+      if (p) prov.nombre = p.nombre;
+    }
+    for (const [mk, entry] of Object.entries(mats)) {
+      if (!entry || entry.disponible === false) continue;   // marca "no maneja"
+      if (prov.precios[mk]) continue;     // cotización formal manda
+      const precio = Number(entry.precio) || 0;
+      if (precio <= 0) continue;
+      prov.precios[mk] = {
+        precio,
+        fecha: entry.fecha || 0,
+        fuente: 'catalogo',
+        estado: 'capturado'
       };
     }
   }

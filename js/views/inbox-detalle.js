@@ -260,6 +260,12 @@ function renderTablaComparativa(an, materiales) {
             const oferta = r.ofertas.find(o => (o.provId || (o.nombre || '').toLowerCase()) === k);
             if (!oferta) return h('td', { class: 'num muted' }, '—');
             const esMejor = oferta.precio === mejorPrecio;
+            const fuenteIcon = oferta.fuente === 'cotizacion' ? '💬'
+              : oferta.fuente === 'oc' ? '📄'
+              : '📋';   // catálogo pre-cotización
+            const fuenteLabel = oferta.fuente === 'cotizacion' ? 'cotización'
+              : oferta.fuente === 'oc' ? 'OC anterior'
+              : 'catálogo de precios';
             return h('td', {
               class: 'num',
               style: {
@@ -267,8 +273,9 @@ function renderTablaComparativa(an, materiales) {
                 fontWeight: esMejor ? '600' : 'normal',
                 background: esMejor ? 'rgba(93, 211, 158, 0.06)' : 'transparent'
               },
-              title: `Importe: ${fmt(oferta.importe)} (${oferta.fuente}, ${dateMx(oferta.fecha)})`
+              title: `Importe: ${fmt(oferta.importe)} · fuente: ${fuenteLabel}${oferta.fecha ? ' · ' + dateMx(oferta.fecha) : ''}`
             }, [
+              h('span', { style: { fontSize: '9px', marginRight: '4px', opacity: '0.5' } }, fuenteIcon),
               fmt(oferta.precio),
               esMejor && h('span', { style: { fontSize: '10px', marginLeft: '4px' } }, '✓')
             ]);
