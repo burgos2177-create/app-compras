@@ -70,6 +70,8 @@ export async function renderCatalogoPrecios({ params, query }) {
   let filtro = (query?.q || '').toLowerCase();
   let famFiltro = query?.fam || '';
   let soloIncompletos = query?.incompletos === '1';
+  let provFiltro = query?.prov || '';            // provId o '' = todos
+  let soloCotizados = query?.cotizados === '1';   // solo filas con al menos un precio
 
   // Familias para selector
   const familias = Array.from(new Set(matKeys.map(k => materiales[k].familia || '').filter(Boolean))).sort();
@@ -94,6 +96,20 @@ export async function renderCatalogoPrecios({ params, query }) {
 
   const incompletosCb = h('input', { type: 'checkbox', checked: soloIncompletos });
   incompletosCb.addEventListener('change', () => { soloIncompletos = incompletosCb.checked; renderBody(); });
+
+  // Filtro por proveedor (oculta las otras columnas)
+  const provFiltroSel = h('select', {}, [
+    h('option', { value: '' }, 'Todos los proveedores'),
+    ...provsConDatos.map(p => h('option', {
+      value: provIdOf(p),
+      selected: provIdOf(p) === provFiltro
+    }, p.nombre + (p.aceptaSinIva ? ' (sin IVA)' : ' (+ IVA)')))
+  ]);
+  provFiltroSel.addEventListener('change', () => { provFiltro = provFiltroSel.value; renderBody(); });
+
+  // Solo ya cotizados (filas con al menos un precio capturado)
+  const cotizadosCb = h('input', { type: 'checkbox', checked: soloCotizados });
+  cotizadosCb.addEventListener('change', () => { soloCotizados = cotizadosCb.checked; renderBody(); });
 
   const guardarBtn = h('button', { class: 'btn primary', disabled: true }, '💾 Guardar cambios (0)');
   guardarBtn.addEventListener('click', async () => {
@@ -164,8 +180,12 @@ export async function renderCatalogoPrecios({ params, query }) {
   const filtros = h('div', { class: 'row', style: { marginBottom: '12px', gap: '10px' } }, [
     search,
     famSel,
+    provFiltroSel,
     h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer', fontSize: '13px' } }, [
-      incompletosCb, h('span', {}, 'Solo materiales incompletos')
+      cotizadosCb, h('span', {}, 'Solo ya cotizados')
+    ]),
+    h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer', fontSize: '13px' } }, [
+      incompletosCb, h('span', {}, 'Solo incompletos')
     ]),
     h('div', { style: { flex: 1 } }),
     solicitarBtn,
@@ -227,14 +247,35 @@ export async function renderCatalogoPrecios({ params, query }) {
   }
 
   function renderBody() {
+    // Proveedores visibles según el filtro: si hay uno seleccionado, solo ese.
+    const provsVisibles = provFiltro
+      ? provsConDatos.filter(p => provIdOf(p) === provFiltro)
+      : provsConDatos;
+    // Si el filtro por proveedor no encuentra nada (raro), caemos a todos
+    const provsParaFila = provsVisibles.length > 0 ? provsVisibles : provsConDatos;
+
+    // Recalculamos hayProvConIva solo sobre los visibles (la columna +IVA
+    // solo aparece si hace falta para los proveedores actualmente mostrados).
+    const hayProvConIvaVisible = provsParaFila.some(p => p.aceptaSinIva === false);
+
     // Filtrar materiales
     const visibles = matKeys.filter(mk => {
       const m = materiales[mk];
       if (filtro && !(`${m.clave || ''} ${m.descripcion || ''} ${m.marca || ''}`.toLowerCase().includes(filtro))) return false;
       if (famFiltro && m.familia !== famFiltro) return false;
+      if (soloCotizados) {
+        // Filas donde el(los) proveedor(es) visible(s) tienen al menos un
+        // precio capturado. Si hay filtro por proveedor, solo cuenta ese.
+        const algunoTiene = provsParaFila.some(p => {
+          const pid = provIdOf(p);
+          const eff = getEffectivePrecio(pid, mk);
+          return Number(eff.precio) > 0;
+        });
+        if (!algunoTiene) return false;
+      }
       if (soloIncompletos) {
-        // Material "incompleto" si alguna columna proveedor está sin precio (ni marcada no disponible)
-        const incomp = provsConDatos.some(p => {
+        // Incompleto si algún proveedor visible no tiene precio (ni marcado no-disp)
+        const incomp = provsParaFila.some(p => {
           const pid = provIdOf(p);
           const eff = getEffectivePrecio(pid, mk);
           return !eff.precio && eff.disponible !== false;
@@ -244,7 +285,15 @@ export async function renderCatalogoPrecios({ params, query }) {
       return true;
     }).sort((a, b) => (materiales[a].clave || '').localeCompare(materiales[b].clave || ''));
 
-    sumaryEl.textContent = `Mostrando ${num0(visibles.length)} de ${num0(matKeys.length)} materiales.`;
+    const detalleFiltros = [];
+    if (provFiltro) {
+      const pName = provsConDatos.find(p => provIdOf(p) === provFiltro)?.nombre || '';
+      detalleFiltros.push(`proveedor: ${pName}`);
+    }
+    if (soloCotizados) detalleFiltros.push('solo cotizados');
+    if (soloIncompletos) detalleFiltros.push('solo incompletos');
+    const sufijo = detalleFiltros.length > 0 ? ` · filtros: ${detalleFiltros.join(', ')}` : '';
+    sumaryEl.textContent = `Mostrando ${num0(visibles.length)} de ${num0(matKeys.length)} materiales${sufijo}.`;
 
     // Header
     const thead = h('thead', {}, h('tr', {}, [
@@ -254,11 +303,11 @@ export async function renderCatalogoPrecios({ params, query }) {
         h('div', {}, 'Catálogo OPUS'),
         h('div', { class: 'muted', style: { fontSize: '10px', fontWeight: 'normal', textTransform: 'none', letterSpacing: 0 } }, 'sin IVA')
       ]),
-      hayProvConIva && h('th', { class: 'num', style: { minWidth: '110px' } }, [
+      hayProvConIvaVisible && h('th', { class: 'num', style: { minWidth: '110px' } }, [
         h('div', {}, 'Catálogo +IVA'),
         h('div', { class: 'muted', style: { fontSize: '10px', fontWeight: 'normal', textTransform: 'none', letterSpacing: 0 } }, `con ${(IVA_PCT * 100).toFixed(0)}% IVA`)
       ]),
-      ...provsConDatos.map(p => h('th', {
+      ...provsParaFila.map(p => h('th', {
         class: 'num',
         style: { minWidth: '130px' },
         title: p.nombre + (p.aceptaSinIva ? ' · acepta sin IVA' : ' · siempre con IVA')
@@ -275,11 +324,11 @@ export async function renderCatalogoPrecios({ params, query }) {
     const tbody = h('tbody', {});
     const cap = 400;   // cap defensivo
     for (const mk of visibles.slice(0, cap)) {
-      tbody.appendChild(matRow(mk));
+      tbody.appendChild(matRow(mk, provsParaFila, hayProvConIvaVisible));
     }
     if (visibles.length > cap) {
       tbody.appendChild(h('tr', {}, h('td', {
-        colSpan: 3 + provsConDatos.length,
+        colSpan: 3 + provsParaFila.length + (hayProvConIvaVisible ? 1 : 0),
         class: 'muted',
         style: { textAlign: 'center', padding: '12px', fontSize: '12px' }
       }, `Mostrando primeros ${cap}. Usa los filtros para acotar.`)));
@@ -290,17 +339,14 @@ export async function renderCatalogoPrecios({ params, query }) {
     tableWrap.appendChild(tbl);
   }
 
-  function matRow(mk) {
+  function matRow(mk, provsParaFila, hayProvConIvaVisible) {
     const m = materiales[mk];
     const opusPrecio = Number(m.costoUnitario) || 0;
     const opusConIva = conIva(opusPrecio);
 
-    // Normalizamos cada precio del proveedor al espacio "sin IVA" para comparar
-    // justo entre regímenes mixtos: si el proveedor es +IVA, dividimos su
-    // precio entre 1.16 para encontrar el "mejor" de la fila. Visualmente
-    // siempre mostramos el precio tal cual lo da el proveedor.
+    // Mejor normalizado calculado solo sobre los proveedores visibles
     let mejorNormalizado = Infinity;
-    for (const p of provsConDatos) {
+    for (const p of provsParaFila) {
       const pid = provIdOf(p);
       const eff = getEffectivePrecio(pid, mk);
       const v = Number(eff.precio) || 0;
@@ -319,12 +365,12 @@ export async function renderCatalogoPrecios({ params, query }) {
     ]));
     tr.appendChild(h('td', { class: 'muted', style: { fontSize: '12px' } }, m.unidad || '—'));
     tr.appendChild(h('td', { class: 'num muted' }, opusPrecio > 0 ? money(opusPrecio) : '—'));
-    if (hayProvConIva) {
+    if (hayProvConIvaVisible) {
       tr.appendChild(h('td', { class: 'num muted', style: { fontStyle: 'italic' } },
         opusPrecio > 0 ? money(opusConIva) : '—'));
     }
 
-    for (const p of provsConDatos) {
+    for (const p of provsParaFila) {
       const pid = provIdOf(p);
       const refPrecio = p.aceptaSinIva ? opusPrecio : opusConIva;
       tr.appendChild(precioCell(p, pid, mk, refPrecio, mejorNormalizado));
