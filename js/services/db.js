@@ -417,6 +417,42 @@ export async function deleteCotizacion(obraId, cotId) {
   return rremove(`obras/${obraId}/cotizaciones/${cotId}`);
 }
 
+// === Solicitudes de cotización (presets) ===
+//
+// Path: /shared/compras/obras/{obraId}/solicitudesCotizacion/{solId}
+//
+// Persistencia de listas armadas en la vista "Solicitar cotización" para
+// poder reabrirlas, editarlas o regenerar el PDF sin volver a llenar todo.
+// No están vinculadas al flujo formal — son utilidades del comprador.
+//
+// Shape:
+//   { nombre, destinatario: {...}, terminos: {...},
+//     items: { [materialKey]: { cantidad, notasItem } },
+//     creadoAt, actualizadoAt, autor, pdfGeneradoAt? }
+
+export async function listSolicitudesCotizacion(obraId) {
+  return (await rread(`obras/${obraId}/solicitudesCotizacion`)) || {};
+}
+export async function getSolicitudCotizacion(obraId, solId) {
+  return await rread(`obras/${obraId}/solicitudesCotizacion/${solId}`);
+}
+export async function createSolicitudCotizacion(obraId, data) {
+  return rpush(`obras/${obraId}/solicitudesCotizacion`, {
+    ...data,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  });
+}
+export async function updateSolicitudCotizacion(obraId, solId, patch) {
+  return rupdate(`obras/${obraId}/solicitudesCotizacion/${solId}`, {
+    ...patch,
+    updatedAt: Date.now()
+  });
+}
+export async function deleteSolicitudCotizacion(obraId, solId) {
+  return rremove(`obras/${obraId}/solicitudesCotizacion/${solId}`);
+}
+
 // === Catálogo de precios pre-cotización ===
 //
 // Path: /shared/compras/obras/{obraId}/preciosCatalogo/{provId}/{materialKey}

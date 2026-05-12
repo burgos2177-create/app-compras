@@ -5,7 +5,10 @@ import {
   getObraMetaLegacy,
   loadCatalogoMateriales,
   listProveedoresObra,
-  listProveedoresGlobal, mergeProveedorObraConGlobal
+  listProveedoresGlobal, mergeProveedorObraConGlobal,
+  listSolicitudesCotizacion, getSolicitudCotizacion,
+  createSolicitudCotizacion, updateSolicitudCotizacion,
+  deleteSolicitudCotizacion
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num0 } from '../util/format.js';
@@ -24,16 +27,19 @@ import { dateMx, num0 } from '../util/format.js';
 //   6. "🖨️ Generar PDF" abre nueva ventana con HTML formateado y dispara print.
 
 // Si llega ?materiales=k1,k2,k3 los pre-selecciona (atajo desde catálogo-precios).
+// Si llega ?solicitud=X carga ese preset guardado y permite editar/regenerar.
 export async function renderSolicitarCotizacion({ params, query }) {
   const obraId = params.id;
+  const solIdParam = query?.solicitud || null;
   setState({ obraActual: obraId });
   renderShell(crumbs(obraId, '...'), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const [meta, catMat, { items: provObra }, globales] = await Promise.all([
+  const [meta, catMat, { items: provObra }, globales, preset] = await Promise.all([
     getObraMetaLegacy(obraId),
     loadCatalogoMateriales(obraId),
     listProveedoresObra(obraId),
-    listProveedoresGlobal()
+    listProveedoresGlobal(),
+    solIdParam ? getSolicitudCotizacion(obraId, solIdParam) : null
   ]);
 
   const materiales = catMat?.items || {};
@@ -56,8 +62,21 @@ export async function renderSolicitarCotizacion({ params, query }) {
 
   // === Estado de la sesión ===
   const selected = new Map();   // matKey → { cantidad: '', notasItem: '' }
-  // Pre-selección desde query string
-  if (query?.materiales) {
+  let solId = solIdParam;       // null si es nueva; string si está editando
+  let nombrePreset = preset?.nombre || '';
+
+  // Si hay preset cargado, sembramos selected con sus items y guardamos
+  // defaults de destinatario/términos para precargarlos abajo.
+  let presetDest = preset?.destinatario || null;
+  let presetTerminos = preset?.terminos || null;
+
+  if (preset?.items) {
+    for (const [mk, sel] of Object.entries(preset.items)) {
+      if (!materiales[mk]) continue;  // skip si el material ya no existe
+      selected.set(mk, { cantidad: sel.cantidad || '', notasItem: sel.notasItem || '' });
+    }
+  } else if (query?.materiales) {
+    // Pre-selección desde catálogo-precios
     for (const mk of query.materiales.split(',').map(s => s.trim()).filter(Boolean)) {
       if (materiales[mk]) selected.set(mk, { cantidad: '', notasItem: '' });
     }
@@ -170,13 +189,17 @@ export async function renderSolicitarCotizacion({ params, query }) {
   // === UI: derecha (panel selección + form destinatario) ===
   const provSel = h('select', {}, [
     h('option', { value: '' }, '— elige proveedor de la obra —'),
-    ...provsObra.map(p => h('option', { value: p.proveedor_global_id || p.id, dataset: { nombre: p.nombre, rfc: p.rfc || '', email: p.email || '', telefono: p.telefono || '' } }, p.nombre))
+    ...provsObra.map(p => h('option', {
+      value: p.proveedor_global_id || p.id,
+      selected: presetDest && (presetDest.proveedor_id === (p.proveedor_global_id || p.id)),
+      dataset: { nombre: p.nombre, rfc: p.rfc || '', email: p.email || '', telefono: p.telefono || '' }
+    }, p.nombre))
   ]);
-  const destNombre = h('input', { placeholder: 'Nombre / razón social', style: { width: '100%' } });
-  const destRfc    = h('input', { placeholder: 'RFC (opcional)', style: { width: '100%' } });
-  const destContacto = h('input', { placeholder: 'Contacto / atención a', style: { width: '100%' } });
-  const destEmail  = h('input', { type: 'email', placeholder: 'Email', style: { width: '100%' } });
-  const destTel    = h('input', { placeholder: 'Teléfono', style: { width: '100%' } });
+  const destNombre = h('input', { placeholder: 'Nombre / razón social', value: presetDest?.nombre || '', style: { width: '100%' } });
+  const destRfc    = h('input', { placeholder: 'RFC (opcional)', value: presetDest?.rfc || '', style: { width: '100%' } });
+  const destContacto = h('input', { placeholder: 'Contacto / atención a', value: presetDest?.contacto || '', style: { width: '100%' } });
+  const destEmail  = h('input', { type: 'email', placeholder: 'Email', value: presetDest?.email || '', style: { width: '100%' } });
+  const destTel    = h('input', { placeholder: 'Teléfono', value: presetDest?.telefono || '', style: { width: '100%' } });
   provSel.addEventListener('change', () => {
     const opt = provSel.options[provSel.selectedIndex];
     if (opt?.dataset?.nombre) {
@@ -184,13 +207,32 @@ export async function renderSolicitarCotizacion({ params, query }) {
       destRfc.value = opt.dataset.rfc || '';
       destEmail.value = opt.dataset.email || '';
       destTel.value = opt.dataset.telefono || '';
+      destContacto.value = '';
     }
   });
 
-  const vigenciaDias = h('input', { type: 'number', value: '15', min: '0', max: '90', style: { width: '80px' } });
-  const fechaEntrega = h('input', { placeholder: 'p.ej. "lo antes posible" o "antes del 15-may"', style: { width: '100%' } });
-  const notas = h('textarea', { rows: 3, placeholder: 'Observaciones, lugar de entrega, condiciones especiales, etc.', style: { width: '100%' } });
-  const incluirCantidades = h('input', { type: 'checkbox', checked: true });
+  // Atajo "A quien corresponda" para solicitudes sin proveedor específico
+  const aQuienCorrespondaBtn = h('button', {
+    class: 'btn sm ghost',
+    type: 'button',
+    title: 'Llenar como solicitud genérica sin proveedor específico',
+    style: { marginTop: '4px' }
+  }, '⚡ A quien corresponda');
+  aQuienCorrespondaBtn.addEventListener('click', () => {
+    provSel.value = '';
+    destNombre.value = 'A quien corresponda';
+    destRfc.value = '';
+    destContacto.value = '';
+    destEmail.value = '';
+    destTel.value = '';
+    destNombre.focus();
+    destNombre.select();
+  });
+
+  const vigenciaDias = h('input', { type: 'number', value: String(presetTerminos?.vigenciaDias ?? 15), min: '0', max: '90', style: { width: '80px' } });
+  const fechaEntrega = h('input', { placeholder: 'p.ej. "lo antes posible" o "antes del 15-may"', value: presetTerminos?.fechaEntrega || '', style: { width: '100%' } });
+  const notas = h('textarea', { rows: 3, placeholder: 'Observaciones, lugar de entrega, condiciones especiales, etc.', style: { width: '100%' } }, presetTerminos?.notas || '');
+  const incluirCantidades = h('input', { type: 'checkbox', checked: presetTerminos?.incluirCantidades !== false });
 
   const panelSeleccionWrap = h('div', { class: 'card', style: { padding: 0, maxHeight: '40vh', overflow: 'auto' } });
 
@@ -298,12 +340,24 @@ export async function renderSolicitarCotizacion({ params, query }) {
     abrirVentanaPDF(payload);
   });
 
+  // === Botones de persistencia ===
+  const guardarBtn = h('button', { class: 'btn' }, solId ? '💾 Guardar cambios' : '💾 Guardar como preset');
+  guardarBtn.addEventListener('click', () => onGuardar());
+  const borrarBtn = h('button', { class: 'btn danger' }, '🗑 Borrar preset');
+  borrarBtn.addEventListener('click', () => onBorrar());
+  const misSolicitudesBtn = h('button', { class: 'btn ghost' }, '📁 Mis solicitudes');
+  misSolicitudesBtn.addEventListener('click', () => onAbrirLista());
+
   // === Render layout ===
+  const tituloEl = h('h1', { style: { margin: 0 } }, solId ? `Solicitud · ${nombrePreset || solId.slice(0, 6)}` : 'Solicitar cotización');
   const head = h('div', { class: 'row' }, [
-    h('h1', { style: { margin: 0 } }, 'Solicitar cotización'),
+    tituloEl,
     h('span', { class: 'muted', style: { fontSize: '12px', marginLeft: '12px' } },
       'Genera una lista lista para mandar al proveedor. Sin compromiso de compra.'),
     h('div', { style: { flex: 1 } }),
+    misSolicitudesBtn,
+    solId && borrarBtn,
+    guardarBtn,
     generarBtn
   ]);
 
@@ -321,7 +375,10 @@ export async function renderSolicitarCotizacion({ params, query }) {
       h('h2', { style: { marginTop: 0, fontSize: '14px', color: 'var(--text-1)', textTransform: 'uppercase', letterSpacing: '0.5px' } }, `Seleccionados`),
       panelSeleccionWrap,
       h('div', { class: 'card', style: { marginTop: '12px' } }, [
-        h('h3', {}, 'Destinatario'),
+        h('div', { class: 'row' }, [
+          h('h3', { style: { margin: 0, flex: 1 } }, 'Destinatario'),
+          aQuienCorrespondaBtn
+        ]),
         h('div', { class: 'field' }, [h('label', {}, 'De la lista de obra'), provSel]),
         h('div', { class: 'field' }, [h('label', {}, 'Nombre *'), destNombre]),
         h('div', { class: 'grid-2' }, [
@@ -346,6 +403,173 @@ export async function renderSolicitarCotizacion({ params, query }) {
       ])
     ])
   ]);
+
+  // === Persistencia ===
+
+  function buildPayload() {
+    const itemsObj = {};
+    for (const [mk, sel] of selected.entries()) {
+      itemsObj[mk] = { cantidad: sel.cantidad || '', notasItem: sel.notasItem || '' };
+    }
+    return {
+      destinatario: {
+        nombre: destNombre.value.trim(),
+        rfc: destRfc.value.trim(),
+        contacto: destContacto.value.trim(),
+        email: destEmail.value.trim(),
+        telefono: destTel.value.trim(),
+        proveedor_id: provSel.value || null
+      },
+      terminos: {
+        vigenciaDias: Number(vigenciaDias.value) || 15,
+        fechaEntrega: fechaEntrega.value.trim(),
+        notas: notas.value.trim(),
+        incluirCantidades: incluirCantidades.checked
+      },
+      items: itemsObj
+    };
+  }
+
+  async function onGuardar() {
+    if (selected.size === 0) { toast('No has seleccionado materiales', 'danger'); return; }
+    if (!destNombre.value.trim()) { toast('Captura el nombre del destinatario', 'danger'); return; }
+
+    // Pedir nombre del preset (si es nuevo o si no tiene nombre todavía)
+    let nombre = nombrePreset;
+    if (!solId || !nombre) {
+      const sugerencia = destNombre.value.trim() && destNombre.value.trim() !== 'A quien corresponda'
+        ? `${destNombre.value.trim()} · ${new Date().toLocaleDateString('es-MX')}`
+        : `Solicitud ${new Date().toLocaleDateString('es-MX')}`;
+      const nombreInput = h('input', { value: sugerencia, autofocus: true });
+      const ok = await new Promise(resolve => {
+        modal({
+          title: solId ? 'Renombrar solicitud' : 'Guardar solicitud',
+          body: h('div', {}, [
+            h('p', { class: 'muted', style: { fontSize: '12px', marginBottom: '8px' } },
+              'Dale un nombre para encontrarla después. Por ejemplo: "Acero · obra Torres mayo" o "Cementos · Construrama".'),
+            h('div', { class: 'field' }, [h('label', {}, 'Nombre'), nombreInput])
+          ]),
+          confirmLabel: 'Guardar',
+          onConfirm: () => {
+            const v = nombreInput.value.trim();
+            if (!v) { toast('Captura un nombre', 'danger'); return false; }
+            nombre = v;
+            resolve(true);
+            return true;
+          }
+        }).then(r => { if (!r) resolve(false); });
+      });
+      if (!ok) return;
+    }
+
+    const u = state.user;
+    const autor = { uid: u.uid, displayName: u.displayName || '', email: u.email || '' };
+    const payload = { ...buildPayload(), nombre, autor };
+
+    try {
+      if (solId) {
+        await updateSolicitudCotizacion(obraId, solId, payload);
+        nombrePreset = nombre;
+        toast('Solicitud actualizada', 'ok');
+        // Repintar el título sin recargar todo
+        tituloEl.textContent = `Solicitud · ${nombre}`;
+        guardarBtn.textContent = '💾 Guardar cambios';
+      } else {
+        const newId = await createSolicitudCotizacion(obraId, payload);
+        toast('Solicitud guardada', 'ok');
+        // Navegar para que la ruta refleje el preset y permitir editar
+        navigate(`/obras/${obraId}/solicitar-cotizacion?solicitud=${newId}`);
+      }
+    } catch (err) {
+      toast('Error al guardar: ' + err.message, 'danger');
+    }
+  }
+
+  async function onBorrar() {
+    if (!solId) return;
+    await modal({
+      title: 'Borrar solicitud',
+      body: h('div', {}, [
+        h('p', {}, `¿Borrar "${nombrePreset}"?`),
+        h('p', { class: 'muted', style: { fontSize: '12px' } },
+          'Solo se borra el preset guardado — no afecta nada del flujo formal. Cualquier PDF que ya hayas mandado al proveedor sigue siendo válido.')
+      ]),
+      confirmLabel: 'Borrar', danger: true,
+      onConfirm: async () => {
+        try {
+          await deleteSolicitudCotizacion(obraId, solId);
+          toast('Solicitud borrada', 'ok');
+          navigate(`/obras/${obraId}/solicitar-cotizacion`);
+          return true;
+        } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+      }
+    });
+  }
+
+  async function onAbrirLista() {
+    const all = await listSolicitudesCotizacion(obraId);
+    const entries = Object.entries(all).sort(([, a], [, b]) =>
+      (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+
+    if (entries.length === 0) {
+      await modal({
+        title: 'Mis solicitudes',
+        body: h('div', {}, [
+          h('p', {}, 'Aún no tienes solicitudes guardadas en esta obra.'),
+          h('p', { class: 'muted', style: { fontSize: '12px' } },
+            'Cuando armes una lista de materiales y captures el destinatario, usa "💾 Guardar como preset" para poder reabrirla después.')
+        ]),
+        confirmLabel: 'OK'
+      });
+      return;
+    }
+
+    const list = h('div', { style: { maxHeight: '440px', overflow: 'auto' } },
+      entries.map(([id, s]) => {
+        const numItems = Object.keys(s.items || {}).length;
+        const fechaTxt = new Date(s.updatedAt || s.createdAt).toLocaleString('es-MX');
+        const row = h('div', {
+          style: {
+            padding: '10px 12px',
+            borderBottom: '1px solid var(--border)',
+            cursor: 'pointer',
+            display: 'flex',
+            gap: '10px',
+            alignItems: 'center'
+          }
+        }, [
+          h('div', { style: { flex: 1, minWidth: 0 } }, [
+            h('div', { style: { fontWeight: '600' } }, s.nombre || '(sin nombre)'),
+            h('div', { class: 'muted', style: { fontSize: '11px' } }, [
+              s.destinatario?.nombre || '—',
+              ' · ', num0(numItems), ' material', numItems === 1 ? '' : 'es',
+              ' · actualizada ', fechaTxt
+            ])
+          ]),
+          id === solId
+            ? h('span', { class: 'tag ok', style: { fontSize: '10px' } }, 'abierta')
+            : h('button', { class: 'btn sm primary' }, 'Abrir')
+        ]);
+        row.addEventListener('click', () => {
+          if (id !== solId) {
+            navigate(`/obras/${obraId}/solicitar-cotizacion?solicitud=${id}`);
+            // Cerrar modal: el modal-backdrop se removerá al navegar (mount limpia el DOM)
+            document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+          }
+        });
+        return row;
+      }));
+
+    await modal({
+      title: `Mis solicitudes de cotización (${entries.length})`,
+      body: h('div', {}, [
+        h('p', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } },
+          'Click en una para abrirla, editarla o regenerar su PDF.'),
+        list
+      ]),
+      confirmLabel: 'Cerrar', cancelLabel: 'Cancelar'
+    });
+  }
 
   renderTabla();
   renderPanel();
