@@ -137,6 +137,24 @@ export async function renderCatalogoPrecios({ params, query }) {
     guardarBtn
   ]);
 
+  const solicitarBtn = h('button', { class: 'btn ghost' }, '🖨️ Solicitar cotización (filtrados)');
+  solicitarBtn.addEventListener('click', () => {
+    // Pasamos las claves visibles como query param para que la vista de
+    // solicitud pre-seleccione esos materiales.
+    const visibles = matKeys.filter(mk => {
+      const m = materiales[mk];
+      if (filtro && !(`${m.clave || ''} ${m.descripcion || ''} ${m.marca || ''}`.toLowerCase().includes(filtro))) return false;
+      if (famFiltro && m.familia !== famFiltro) return false;
+      return true;
+    });
+    if (visibles.length === 0) { toast('No hay materiales filtrados', 'danger'); return; }
+    if (visibles.length > 100) {
+      toast(`${visibles.length} es mucho. Filtra más para hacer una solicitud manejable.`, 'warn');
+    }
+    const q = encodeURIComponent(visibles.join(','));
+    navigate(`/obras/${obraId}/solicitar-cotizacion?materiales=${q}`);
+  });
+
   const filtros = h('div', { class: 'row', style: { marginBottom: '12px', gap: '10px' } }, [
     search,
     famSel,
@@ -144,6 +162,7 @@ export async function renderCatalogoPrecios({ params, query }) {
       incompletosCb, h('span', {}, 'Solo materiales incompletos')
     ]),
     h('div', { style: { flex: 1 } }),
+    solicitarBtn,
     h('button', { class: 'btn ghost', onClick: () => navigate(`/obras/${obraId}/proveedores`) }, '🏷️ Gestionar proveedores')
   ]);
 

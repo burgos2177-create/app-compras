@@ -15,6 +15,7 @@ import { renderProveedores } from './views/proveedores.js';
 import { renderProveedoresObra } from './views/proveedores-obra.js';
 import { renderProveedorObraDetalle } from './views/proveedor-obra-detalle.js';
 import { renderCatalogoPrecios } from './views/catalogo-precios.js';
+import { renderSolicitarCotizacion } from './views/solicitar-cotizacion.js';
 import { h, mount } from './util/dom.js';
 
 route('/',                                  () => renderObrasList());
@@ -31,6 +32,7 @@ route('/obras/:id/oc/:ocid',                renderOCDetalle);
 route('/obras/:id/proveedores',             renderProveedoresObra);
 route('/obras/:id/proveedores/:provid',     renderProveedorObraDetalle);
 route('/obras/:id/catalogo-precios',        renderCatalogoPrecios);
+route('/obras/:id/solicitar-cotizacion',    renderSolicitarCotizacion);
 
 let started = false;
 
