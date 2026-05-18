@@ -15,6 +15,24 @@ import { navigate } from '../state/router.js';
 import { dateMx, num, num0, money } from '../util/format.js';
 import { estadoSCBadge } from './subcontratos.js';
 
+// Helpers tolerantes al shape del catálogo unificado.
+// El catálogo en /shared/catalogos/{obraId}/conceptos usa snake_case
+// (precio_unitario), pero algunos lectores viejos tenían camelCase. Esto
+// soporta ambos sin que nada se rompa si el shape varía.
+function precioUnitarioOf(con) {
+  if (!con) return 0;
+  return Number(con.precio_unitario ?? con.precioUnitario) || 0;
+}
+// Un concepto es "cotizable" si es PU explícito, o si no tiene tipo asignado
+// pero tampoco es agrupador (defensa contra catálogos sin tipo bien marcado).
+function esConceptoCotizable(con) {
+  if (!con) return false;
+  if (con.tipo === 'precio_unitario') return true;
+  if (con.tipo === 'agrupador') return false;
+  // Sin tipo definido: si tiene precio_unitario o cantidad, lo tratamos como PU
+  return precioUnitarioOf(con) > 0 || Number(con.cantidad) > 0;
+}
+
 // Detalle de subcontrato con 3 tabs:
 //   - Alcance: conceptos OPUS + cantidades
 //   - Licitantes: tabla comparativa de precios por concepto, con ahorro % vs
@@ -118,7 +136,7 @@ function renderAlcance(obraId, scId, scConceptos, conceptos, editable) {
   let totalCatalogo = 0;
   for (const [, c] of entries) {
     const con = conceptos[c.conceptoId];
-    if (con) totalCatalogo += (Number(c.cantidad) || 0) * (Number(con.precioUnitario) || 0);
+    if (con) totalCatalogo += (Number(c.cantidad) || 0) * precioUnitarioOf(con);
   }
 
   const head = h('div', { class: 'row' }, [
@@ -171,7 +189,7 @@ function renderAlcance(obraId, scId, scConceptos, conceptos, editable) {
 
 function conceptoAlcanceRow(obraId, scId, cid, c, conceptos, editable) {
   const con = conceptos[c.conceptoId];
-  const precioCat = Number(con?.precioUnitario) || 0;
+  const precioCat = precioUnitarioOf(con);
   const cantidad = Number(c.cantidad) || 0;
   const importe = cantidad * precioCat;
 
@@ -210,7 +228,7 @@ async function onAgregarConcepto(obraId, scId, scConceptos, conceptos) {
   // Un PU "pertenece" a un agrupador si el agrupador está en su path.
   const pusPorAgrupador = new Map();   // agrupadorCid → [puCid, ...]
   for (const con of todos) {
-    if (con.tipo !== 'precio_unitario') continue;
+    if (!esConceptoCotizable(con)) continue;
     if (yaEnAlcance.has(con.cid)) continue;
     // Buscar todos los agrupadores ancestros en `todos` (mismo path)
     for (const ag of (con.path || []).slice(0, -1)) {   // path incluye al propio PU al final
@@ -241,7 +259,7 @@ async function onAgregarConcepto(obraId, scId, scConceptos, conceptos) {
     const total = seleccionados.size;
     const importe = Array.from(seleccionados.entries()).reduce((sum, [cid, sel]) => {
       const con = conceptos[cid];
-      const pu = Number(con?.precioUnitario) || 0;
+      const pu = precioUnitarioOf(con);
       return sum + (Number(sel.cantidad) || 0) * pu;
     }, 0);
     contadorEl.textContent = total === 0
@@ -262,12 +280,12 @@ async function onAgregarConcepto(obraId, scId, scConceptos, conceptos) {
       // Filtros — el match aplica a agrupadores Y PUs. Si un PU matchea, también
       // mostramos su agrupador padre para no perder contexto.
       const yaIncluido = yaEnAlcance.has(con.cid);
-      if (con.tipo === 'precio_unitario') {
+      if (esConceptoCotizable(con)) {
         if (soloPendientes && yaIncluido) continue;
         if (busqueda && !(`${con.clave || ''} ${con.descripcion || ''}`.toLowerCase().includes(busqueda))) continue;
         lista.appendChild(filaPU(con, yaIncluido));
         visibles++;
-      } else {
+      } else if (con.tipo === 'agrupador') {
         // Agrupador: mostrarlo si tiene al menos un PU visible bajo él, o si su
         // propia descripción matchea la búsqueda
         const matchPropio = !busqueda || `${con.clave || ''} ${con.descripcion || ''}`.toLowerCase().includes(busqueda);
@@ -368,7 +386,7 @@ async function onAgregarConcepto(obraId, scId, scConceptos, conceptos) {
     });
 
     const opusCant = Number(pu.cantidad) || 0;
-    const opusPU = Number(pu.precioUnitario) || 0;
+    const opusPU = precioUnitarioOf(pu);
     const opusTotal = opusCant * opusPU;
 
     return h('div', {
@@ -586,7 +604,7 @@ function renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, pr
   let totalCatalogo = 0;
   for (const [, c] of sortedConceptos) {
     const con = conceptos[c.conceptoId];
-    totalCatalogo += (Number(c.cantidad) || 0) * (Number(con?.precioUnitario) || 0);
+    totalCatalogo += (Number(c.cantidad) || 0) * precioUnitarioOf(con);
   }
 
   return h('div', { class: 'card', style: { padding: 0 } }, [
@@ -647,7 +665,7 @@ function licColumnHeader(obraId, scId, licId, lic, total, totalCat, esAdj, edita
 
 function licitanteFila(obraId, scId, cid, c, conceptos, licEntries, mejorLicId, editable, adjudicadoId) {
   const con = conceptos[c.conceptoId];
-  const precioCat = Number(con?.precioUnitario) || 0;
+  const precioCat = precioUnitarioOf(con);
   return h('tr', {}, [
     h('td', { style: { maxWidth: '280px', position: 'sticky', left: 0, background: 'var(--bg-1)', zIndex: 1 } }, [
       h('div', { class: 'mono', style: { fontSize: '11px', color: 'var(--text-2)' } }, con?.clave || c.conceptoId.slice(0, 10)),
@@ -841,7 +859,7 @@ function renderAdjudicacion(obraId, scId, scConceptos, scLicitantes, conceptos, 
   // Calcular total y % completado de cotización por licitante
   let totalCatalogo = 0;
   for (const c of conceptoArr) {
-    totalCatalogo += (Number(c.cantidad) || 0) * (Number(conceptos[c.conceptoId]?.precioUnitario) || 0);
+    totalCatalogo += (Number(c.cantidad) || 0) * precioUnitarioOf(conceptos[c.conceptoId]);
   }
 
   const ranking = licEntries.map(([licId, lic]) => {
