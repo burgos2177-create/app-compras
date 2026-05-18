@@ -39,6 +39,22 @@ function esConceptoCotizable(con) {
   return tieneValor;
 }
 
+// Precio comparable de un licitante para un concepto del subcontrato.
+// - Subcontrato completo: el precio capturado.
+// - Destajo: precio capturado + costoMaterialSogrub del concepto del alcance.
+// Devuelve { precio, comparable, esDestajo, materialSogrub }.
+function precioComparable(lic, conceptoEnAlcance) {
+  const precio = Number(lic?.precios?.[conceptoEnAlcance?.conceptoId]) || 0;
+  const esDestajo = lic?.tipoSubcontratacion === 'destajo';
+  const materialSogrub = Number(conceptoEnAlcance?.costoMaterialSogrub) || 0;
+  return {
+    precio,
+    materialSogrub,
+    esDestajo,
+    comparable: esDestajo ? precio + materialSogrub : precio
+  };
+}
+
 // Detalle de subcontrato con 3 tabs:
 //   - Alcance: conceptos OPUS + cantidades
 //   - Licitantes: tabla comparativa de precios por concepto, con ahorro % vs
@@ -177,6 +193,8 @@ function renderAlcance(obraId, scId, scConceptos, conceptos, editable) {
 
   return h('div', { class: 'card', style: { padding: 0 } }, [
     h('div', { style: { padding: '14px 18px 4px' } }, head),
+    h('div', { class: 'muted', style: { padding: '0 18px 8px', fontSize: '11px' } },
+      'Si vas a considerar destajistas (solo mano de obra), captura el costo de material/equipo que pondría SOGRUB por concepto. La comparativa lo sumará al precio del destajista para compararlo justo contra subcontratistas completos.'),
     h('table', { class: 'tbl' }, [
       h('thead', {}, h('tr', {}, [
         h('th', {}, 'Clave'),
@@ -184,6 +202,7 @@ function renderAlcance(obraId, scId, scConceptos, conceptos, editable) {
         h('th', {}, 'Unidad'),
         h('th', { class: 'num' }, 'Cantidad'),
         h('th', { class: 'num' }, 'P.U. catálogo'),
+        h('th', { class: 'num', title: 'Costo de material/equipo que SOGRUB pondría si se contrata un destajista' }, 'Material SOGRUB'),
         h('th', { class: 'num' }, 'Importe ref.'),
         h('th', {}, 'Notas'),
         editable && h('th', {}, '')
@@ -198,6 +217,7 @@ function conceptoAlcanceRow(obraId, scId, cid, c, conceptos, editable) {
   const precioCat = precioUnitarioOf(con);
   const cantidad = Number(c.cantidad) || 0;
   const importe = cantidad * precioCat;
+  const costoMat = Number(c.costoMaterialSogrub) || 0;
 
   const conLabel = con
     ? h('div', {}, [
@@ -206,12 +226,31 @@ function conceptoAlcanceRow(obraId, scId, cid, c, conceptos, editable) {
     ])
     : h('div', { class: 'tag warn' }, '⚠ Concepto no existe en catálogo');
 
+  // Input inline para costoMaterialSogrub con autosave debounced
+  const matInput = h('input', {
+    type: 'number', step: '0.01', min: '0',
+    value: costoMat > 0 ? String(costoMat) : '',
+    placeholder: '$',
+    style: { width: '90px', textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '12px' },
+    disabled: !editable
+  });
+  let matTimer = null;
+  matInput.addEventListener('input', () => {
+    clearTimeout(matTimer);
+    const v = Number(matInput.value) || 0;
+    matTimer = setTimeout(() => {
+      updateSubcontratoConcepto(obraId, scId, cid, { costoMaterialSogrub: v })
+        .catch(err => toast('Error: ' + err.message, 'danger'));
+    }, 600);
+  });
+
   return h('tr', {}, [
     h('td', { class: 'mono', style: { fontSize: '11px' } }, con?.clave || c.conceptoId.slice(0, 10)),
     h('td', { style: { maxWidth: '380px' } }, conLabel),
     h('td', {}, con?.unidad || '—'),
     h('td', { class: 'num' }, num(cantidad)),
     h('td', { class: 'num muted' }, precioCat > 0 ? money(precioCat) : '—'),
+    h('td', { class: 'num', style: { padding: '4px 6px' } }, matInput),
     h('td', { class: 'num' }, importe > 0 ? money(importe) : '—'),
     h('td', { class: 'muted', style: { fontSize: '12px' } }, c.notas || ''),
     editable && h('td', {}, h('div', { class: 'row', style: { gap: '4px' } }, [
@@ -514,17 +553,27 @@ async function onAgregarConcepto(obraId, scId, scConceptos, conceptos) {
 async function onEditarConcepto(obraId, scId, cid, c, conceptos) {
   const con = conceptos[c.conceptoId];
   const cantidad = h('input', { type: 'number', step: '0.01', min: '0', value: String(c.cantidad || 0), autofocus: true });
+  const costoMat = h('input', { type: 'number', step: '0.01', min: '0', value: String(c.costoMaterialSogrub || 0) });
   const notas = h('input', { value: c.notas || '' });
   await modal({
     title: `Editar concepto: ${con?.clave || ''}`,
     body: h('div', {}, [
-      h('div', { class: 'field' }, [h('label', {}, 'Cantidad'), cantidad]),
+      h('div', { class: 'grid-2' }, [
+        h('div', { class: 'field' }, [h('label', {}, 'Cantidad'), cantidad]),
+        h('div', { class: 'field' }, [
+          h('label', {}, 'Material SOGRUB (P.U.)'),
+          costoMat,
+          h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } },
+            'Costo de material/equipo si se contrata destajista (solo MO).')
+        ])
+      ]),
       h('div', { class: 'field' }, [h('label', {}, 'Notas'), notas])
     ]),
     confirmLabel: 'Guardar',
     onConfirm: async () => {
       await updateSubcontratoConcepto(obraId, scId, cid, {
         cantidad: Number(cantidad.value) || 0,
+        costoMaterialSogrub: Number(costoMat.value) || 0,
         notas: notas.value.trim()
       });
       toast('Concepto actualizado', 'ok');
@@ -590,26 +639,29 @@ function renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, pr
     return ca.localeCompare(cb);
   });
 
-  // Pre-calcular: por concepto, mejor precio (sin IVA normalizado)
+  // Pre-calcular: por concepto, mejor precio comparable (normalizado sin IVA,
+  // incluye material SOGRUB sumado si el licitante es destajo)
   const mejorPorConcepto = {};
   for (const [cid, c] of sortedConceptos) {
     let minNorm = Infinity, mejorLic = null;
     for (const [licId, lic] of licEntries) {
-      const p = Number(lic.precios?.[c.conceptoId]) || 0;
-      if (p <= 0) continue;
-      const norm = lic.aceptaSinIva !== false ? p : (p / 1.16);
+      const pc = precioComparable(lic, c);
+      if (pc.precio <= 0) continue;     // si no cotizó, no entra
+      // Normalizar al espacio sin IVA si el licitante es +IVA
+      const norm = lic.aceptaSinIva !== false ? pc.comparable : (pc.comparable / 1.16);
       if (norm < minNorm) { minNorm = norm; mejorLic = licId; }
     }
     mejorPorConcepto[cid] = mejorLic;
   }
 
-  // Pre-calcular: total por licitante
+  // Pre-calcular: total comparable por licitante (suma precio_comparable × cantidad)
   const totalesLic = {};
   for (const [licId, lic] of licEntries) {
     let t = 0;
     for (const [, c] of sortedConceptos) {
-      const p = Number(lic.precios?.[c.conceptoId]) || 0;
-      t += p * (Number(c.cantidad) || 0);
+      const pc = precioComparable(lic, c);
+      if (pc.precio <= 0) continue;
+      t += pc.comparable * (Number(c.cantidad) || 0);
     }
     totalesLic[licId] = t;
   }
@@ -645,14 +697,17 @@ function renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, pr
 function licColumnHeader(obraId, scId, licId, lic, total, totalCat, esAdj, editable) {
   const ahorro = totalCat > 0 ? (totalCat - total) / totalCat : 0;
   const ahorroColor = ahorro > 0 ? 'var(--ok)' : 'var(--danger)';
+  const esDestajo = lic.tipoSubcontratacion === 'destajo';
   return h('th', {
     class: 'num',
     style: {
-      minWidth: '140px',
+      minWidth: '160px',
       background: esAdj ? 'rgba(93, 211, 158, 0.08)' : undefined,
       borderTop: esAdj ? '2px solid var(--ok)' : undefined
     },
-    title: lic.nombre + (lic.aceptaSinIva !== false ? ' · sin IVA' : ' · +IVA')
+    title: lic.nombre +
+      (lic.aceptaSinIva !== false ? ' · sin IVA' : ' · +IVA') +
+      (esDestajo ? ' · destajo (solo MO)' : ' · subcontrato completo')
   }, [
     h('div', { class: 'row', style: { justifyContent: 'space-between', gap: '4px' } }, [
       h('div', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' } }, [
@@ -665,12 +720,16 @@ function licColumnHeader(obraId, scId, licId, lic, total, totalCat, esAdj, edita
         onClick: (e) => { e.stopPropagation(); onQuitarLicitante(obraId, scId, licId, lic); }
       }, '✕')
     ]),
-    h('div', { style: { fontSize: '10px', fontWeight: 'normal', textTransform: 'none', letterSpacing: 0 } }, [
+    h('div', { style: { fontSize: '10px', fontWeight: 'normal', textTransform: 'none', letterSpacing: 0, display: 'flex', gap: '4px', flexWrap: 'wrap' } }, [
       lic.aceptaSinIva !== false
         ? h('span', { style: { color: 'var(--ok)' } }, 'sin IVA')
-        : h('span', { style: { color: 'var(--warn)' } }, '+ IVA')
+        : h('span', { style: { color: 'var(--warn)' } }, '+ IVA'),
+      esDestajo && h('span', { style: { color: 'var(--warn)', fontWeight: '600' } }, '· DESTAJO')
     ]),
     h('div', { style: { fontSize: '11px', fontWeight: '600', color: 'var(--text-0)', marginTop: '2px' } }, money(total)),
+    esDestajo && total > 0 && h('div', {
+      style: { fontSize: '9px', color: 'var(--text-2)', textTransform: 'none', letterSpacing: 0 }
+    }, 'MO + material SOGRUB'),
     total > 0 && totalCat > 0 && h('div', {
       style: { fontSize: '10px', fontWeight: 'normal', color: ahorroColor, textTransform: 'none', letterSpacing: 0 }
     }, `${ahorro > 0 ? '−' : '+'}${Math.abs(ahorro * 100).toFixed(1)}%`)
@@ -694,18 +753,25 @@ function licitanteFila(obraId, scId, cid, c, conceptos, licEntries, mejorLicId, 
 }
 
 function precioCelda(obraId, scId, licId, lic, c, precioCat, esMejor, editable, esAdj) {
-  const precio = Number(lic.precios?.[c.conceptoId]) || 0;
+  const pc = precioComparable(lic, c);
+  const precio = pc.precio;
+  const comparable = pc.comparable;
+  const esDestajo = pc.esDestajo;
+  const matSogrub = pc.materialSogrub;
+
+  // Para la colorización, comparamos el precio COMPARABLE contra el catálogo
+  // (ajustado por IVA si el licitante es +IVA).
   const refPrecio = lic.aceptaSinIva !== false ? precioCat : (precioCat * 1.16);
   const cantidad = Number(c.cantidad) || 0;
-  const importe = precio * cantidad;
-  const ahorro = refPrecio > 0 && precio > 0 ? (refPrecio - precio) / refPrecio : 0;
+  const importeComparable = comparable * cantidad;
+  const ahorro = refPrecio > 0 && comparable > 0 ? (refPrecio - comparable) / refPrecio : 0;
 
   const input = h('input', {
     type: 'number',
     step: '0.01',
     min: '0',
     value: precio > 0 ? String(precio) : '',
-    placeholder: '$',
+    placeholder: esDestajo ? 'MO $' : '$',
     style: {
       width: '90px', textAlign: 'right', fontFamily: 'var(--mono)',
       background: esAdj ? 'rgba(93, 211, 158, 0.05)' : 'var(--bg-1)'
@@ -718,17 +784,20 @@ function precioCelda(obraId, scId, licId, lic, c, precioCat, esMejor, editable, 
     if (!v) {
       input.style.color = 'var(--text-0)';
       input.style.borderColor = 'var(--border)';
+      input.style.fontWeight = 'normal';
       return;
     }
+    // Comparación usa el precio comparable, no solo el cotizado.
+    const vComparable = esDestajo ? v + matSogrub : v;
     if (esMejor) {
       input.style.color = 'var(--ok)';
       input.style.borderColor = 'rgba(93, 211, 158, 0.4)';
       input.style.fontWeight = '600';
-    } else if (refPrecio > 0 && v < refPrecio) {
+    } else if (refPrecio > 0 && vComparable < refPrecio) {
       input.style.color = 'var(--ok)';
       input.style.borderColor = 'var(--border)';
       input.style.fontWeight = 'normal';
-    } else if (refPrecio > 0 && v > refPrecio) {
+    } else if (refPrecio > 0 && vComparable > refPrecio) {
       input.style.color = 'var(--danger)';
       input.style.borderColor = 'var(--border)';
       input.style.fontWeight = 'normal';
@@ -751,17 +820,41 @@ function precioCelda(obraId, scId, licId, lic, c, precioCat, esMejor, editable, 
     }, 600);
   });
 
+  // Sub-líneas en la celda según tipo
+  const subLineas = [];
+  if (precio > 0) {
+    if (esDestajo && matSogrub > 0) {
+      subLineas.push(h('div', { style: { fontSize: '9px', color: 'var(--text-2)', marginTop: '2px' } },
+        `MO ${money(precio)} + mat ${money(matSogrub)}`));
+      subLineas.push(h('div', { style: { fontSize: '10px', color: 'var(--text-1)', fontWeight: '600' } },
+        '= ' + money(comparable)));
+    } else if (esDestajo) {
+      subLineas.push(h('div', { style: { fontSize: '9px', color: 'var(--warn)', marginTop: '2px' } },
+        '⚠ falta capt. material'));
+    }
+    subLineas.push(h('div', { style: { fontSize: '10px', color: 'var(--text-2)', marginTop: '2px' } },
+      'Imp: ' + money(importeComparable)));
+  }
+
+  const titleParts = [];
+  if (precio > 0) {
+    if (esDestajo) {
+      titleParts.push(`MO ${money(precio)} + material SOGRUB ${money(matSogrub)} = ${money(comparable)} comparable`);
+    } else {
+      titleParts.push(`Precio ${money(precio)}`);
+    }
+    titleParts.push(`Importe ${money(importeComparable)}`);
+    if (refPrecio > 0) titleParts.push(`ahorro ${(ahorro * 100).toFixed(1)}%`);
+  }
+
   return h('td', {
     class: 'num',
     style: {
       padding: '4px 6px',
       background: esAdj ? 'rgba(93, 211, 158, 0.04)' : undefined
     },
-    title: precio > 0 ? `Importe ${money(importe)}${refPrecio > 0 ? ' · ahorro ' + (ahorro * 100).toFixed(1) + '%' : ''}` : ''
-  }, [
-    input,
-    importe > 0 && h('div', { style: { fontSize: '10px', color: 'var(--text-2)', marginTop: '2px' } }, money(importe))
-  ]);
+    title: titleParts.join(' · ')
+  }, [input, ...subLineas]);
 }
 
 async function onAgregarLicitante(obraId, scId, scConceptos, scLicitantes, proveedoresObra) {
@@ -800,6 +893,10 @@ async function onAgregarLicitante(obraId, scId, scConceptos, scLicitantes, prove
         }
       }, p.nombre + (p.aceptaSinIva !== false ? ' (sin IVA)' : ' (+ IVA)')))
   ]);
+  const tipoSubSel = h('select', {}, [
+    h('option', { value: 'subcontrato' }, 'Subcontrato (MO + material + equipo)'),
+    h('option', { value: 'destajo' }, 'Destajo (solo mano de obra)')
+  ]);
   const notas = h('input', { placeholder: 'Notas (opcional)' });
 
   await modal({
@@ -813,6 +910,12 @@ async function onAgregarLicitante(obraId, scId, scConceptos, scLicitantes, prove
           h('a', { href: `#/obras/${obraId}/proveedores` }, 'Agrégalo primero a la obra'),
           ' y vuelve aquí.'
         ])
+      ]),
+      h('div', { class: 'field' }, [
+        h('label', {}, 'Tipo de contratación'),
+        tipoSubSel,
+        h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
+          'Si es destajo, sus precios se suman al "Material SOGRUB" capturado en el alcance para compararlos justamente contra subcontratistas completos.')
       ]),
       h('div', { class: 'field' }, [h('label', {}, 'Notas iniciales'), notas])
     ]),
@@ -829,6 +932,7 @@ async function onAgregarLicitante(obraId, scId, scConceptos, scLicitantes, prove
           telefono: opt.dataset.telefono,
           contacto: opt.dataset.contacto,
           aceptaSinIva: opt.dataset.aceptaSinIva === '1',
+          tipoSubcontratacion: tipoSubSel.value,
           notas: notas.value.trim()
         });
         toast('Licitante agregado', 'ok');
@@ -877,18 +981,24 @@ function renderAdjudicacion(obraId, scId, scConceptos, scLicitantes, conceptos, 
   }
 
   const ranking = licEntries.map(([licId, lic]) => {
-    let total = 0, cubre = 0;
+    let totalComparable = 0, totalCotizado = 0, cubre = 0;
+    let faltaMaterial = false;
     for (const c of conceptoArr) {
-      const p = Number(lic.precios?.[c.conceptoId]) || 0;
-      if (p > 0) {
+      const pc = precioComparable(lic, c);
+      if (pc.precio > 0) {
         cubre++;
-        total += p * (Number(c.cantidad) || 0);
+        totalComparable += pc.comparable * (Number(c.cantidad) || 0);
+        totalCotizado += pc.precio * (Number(c.cantidad) || 0);
+        if (pc.esDestajo && pc.materialSogrub === 0) faltaMaterial = true;
       }
     }
     return {
-      licId, lic, total, cubre, totalConceptos: conceptoArr.length,
+      licId, lic, total: totalComparable, totalCotizado, cubre,
+      totalConceptos: conceptoArr.length,
       completo: cubre === conceptoArr.length,
-      ahorro: totalCatalogo > 0 ? (totalCatalogo - total) / totalCatalogo : 0
+      esDestajo: lic.tipoSubcontratacion === 'destajo',
+      faltaMaterial,
+      ahorro: totalCatalogo > 0 ? (totalCatalogo - totalComparable) / totalCatalogo : 0
     };
   }).sort((a, b) => {
     if (a.completo !== b.completo) return a.completo ? -1 : 1;
@@ -920,21 +1030,34 @@ function rankingCard(obraId, scId, r, scMeta, editable) {
   }, [
     h('div', { class: 'row', style: { gap: '12px' } }, [
       h('div', { style: { flex: 1 } }, [
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, [
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } }, [
           esAdj && h('span', { style: { color: 'var(--ok)', fontSize: '18px' } }, '🏆'),
           h('b', { style: { fontSize: '15px' } }, r.lic.nombre),
           r.lic.aceptaSinIva !== false
             ? h('span', { class: 'tag', style: { fontSize: '10px' } }, 'sin IVA')
-            : h('span', { class: 'tag warn', style: { fontSize: '10px' } }, '+ IVA')
+            : h('span', { class: 'tag warn', style: { fontSize: '10px' } }, '+ IVA'),
+          r.esDestajo && h('span', { class: 'tag warn', style: { fontSize: '10px' } }, 'DESTAJO (solo MO)')
         ]),
         h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } }, [
           'Cotizó ', h('b', {}, `${r.cubre}/${r.totalConceptos}`), ' conceptos',
           r.completo ? '' : ' · ⚠ cotización incompleta',
           r.lic.rfc && ' · RFC: ' + r.lic.rfc
+        ]),
+        r.esDestajo && r.faltaMaterial && h('div', {
+          class: 'tag danger',
+          style: { marginTop: '6px', whiteSpace: 'normal', display: 'block', fontSize: '11px' }
+        }, '⚠ Comparación imprecisa: hay conceptos sin "Material SOGRUB" capturado en el alcance. Captúralos para que el total comparable sea justo.'),
+        r.esDestajo && r.totalCotizado > 0 && h('div', {
+          class: 'muted',
+          style: { fontSize: '11px', marginTop: '4px' }
+        }, [
+          'MO cotizada: ', h('b', {}, money(r.totalCotizado)),
+          ' · material SOGRUB: ', h('b', {}, money(r.total - r.totalCotizado))
         ])
       ]),
       h('div', { style: { textAlign: 'right' } }, [
         h('div', { style: { fontFamily: 'var(--mono)', fontSize: '18px', fontWeight: '600' } }, money(r.total)),
+        r.esDestajo && r.totalCotizado > 0 && h('div', { style: { fontSize: '10px', color: 'var(--text-2)' } }, 'MO + material'),
         r.total > 0 && h('div', { style: { fontSize: '11px', color: ahorroColor } },
           `${r.ahorro > 0 ? '−' : '+'}${Math.abs(r.ahorro * 100).toFixed(1)}% vs catálogo`)
       ]),
@@ -1031,8 +1154,9 @@ function totalLicitante(lic, scConceptos) {
   if (!lic) return 0;
   let t = 0;
   for (const c of Object.values(scConceptos || {})) {
-    const p = Number(lic.precios?.[c.conceptoId]) || 0;
-    t += p * (Number(c.cantidad) || 0);
+    const pc = precioComparable(lic, c);
+    if (pc.precio <= 0) continue;
+    t += pc.comparable * (Number(c.cantidad) || 0);
   }
   return t;
 }

@@ -67,12 +67,17 @@ function scRow(obraId, scId, sc) {
   const licitantes = sc.licitantes || {};
   const adjudicado = m.licitanteAdjudicadoId ? licitantes[m.licitanteAdjudicadoId] : null;
 
-  // Importe adjudicado: suma de precio×cantidad del licitante ganador para cada concepto
+  // Importe adjudicado: para destajistas suma precio+materialSogrub × cantidad;
+  // para subcontratos suma precio × cantidad. Refleja el costo real para SOGRUB.
   let importeAdj = 0;
   if (adjudicado) {
+    const esDestajo = adjudicado.tipoSubcontratacion === 'destajo';
     for (const c of Object.values(conceptos)) {
       const precio = Number(adjudicado.precios?.[c.conceptoId]) || 0;
-      importeAdj += precio * (Number(c.cantidad) || 0);
+      if (precio <= 0) continue;
+      const matSogrub = Number(c.costoMaterialSogrub) || 0;
+      const comparable = esDestajo ? precio + matSogrub : precio;
+      importeAdj += comparable * (Number(c.cantidad) || 0);
     }
   }
 

@@ -486,15 +486,16 @@ export async function addSubcontratoConcepto(obraId, scId, data) {
   await rset(`obras/${obraId}/subcontratos/${scId}/conceptos/${id}`, {
     conceptoId: data.conceptoId,
     cantidad: Number(data.cantidad) || 0,
+    // Costo aproximado de material/equipo que SOGRUB pondría si se contrata
+    // a un destajista (solo MO). Se suma al precio del destajista para
+    // comparar justo contra subcontratistas completos.
+    costoMaterialSogrub: Number(data.costoMaterialSogrub) || 0,
     notas: data.notas || ''
   });
   await updateSubcontratoMeta(obraId, scId, {});
   return id;
 }
 
-// Bulk: agrega varios conceptos al alcance en una sola operación. Útil cuando
-// se selecciona una partida completa o múltiples conceptos en el picker.
-// `items` es un array de { conceptoId, cantidad, notas? }.
 export async function addSubcontratoConceptosBulk(obraId, scId, items) {
   if (!Array.isArray(items) || items.length === 0) return [];
   const ids = [];
@@ -503,6 +504,7 @@ export async function addSubcontratoConceptosBulk(obraId, scId, items) {
     await rset(`obras/${obraId}/subcontratos/${scId}/conceptos/${id}`, {
       conceptoId: data.conceptoId,
       cantidad: Number(data.cantidad) || 0,
+      costoMaterialSogrub: Number(data.costoMaterialSogrub) || 0,
       notas: data.notas || ''
     });
     ids.push(id);
@@ -520,6 +522,14 @@ export async function removeSubcontratoConcepto(obraId, scId, cid) {
 }
 
 // Licitantes (snapshot de proveedor + sus precios para los conceptos del alcance)
+//
+// tipoSubcontratacion:
+//   'subcontrato' (default): licitante suministra mano de obra + material + equipo.
+//                            Su precio cotizado se compara directo contra catálogo.
+//   'destajo':               licitante solo suministra mano de obra. SOGRUB pone
+//                            material y equipo. Su precio cotizado es solo MO y
+//                            para comparar se le suma el costoMaterialSogrub
+//                            capturado por concepto en el alcance.
 export async function addSubcontratoLicitante(obraId, scId, data) {
   const r = await rpush(`obras/${obraId}/subcontratos/${scId}/licitantes`, {
     provId: data.provId || null,
@@ -529,6 +539,7 @@ export async function addSubcontratoLicitante(obraId, scId, data) {
     telefono: data.telefono || '',
     contacto: data.contacto || '',
     aceptaSinIva: data.aceptaSinIva !== false,
+    tipoSubcontratacion: data.tipoSubcontratacion || 'subcontrato',
     precios: data.precios || {},
     notas: data.notas || '',
     fechaCotizacion: data.fechaCotizacion || Date.now(),
