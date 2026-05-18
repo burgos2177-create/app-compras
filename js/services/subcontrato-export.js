@@ -452,6 +452,10 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
   drawHeader(doc, obra, `COMPARATIVA — ${meta.nombre || 'Subcontrato'}`);
 
+  // Solo mostramos columna "Mat. SOGRUB" si hay al menos un destajista
+  // (si no, esa columna está siempre vacía y solo estorba).
+  const hayDestajo = lics.some(l => l.tipoSubcontratacion === 'destajo');
+
   let totalCat = 0;
   const totales = lics.map(() => 0);
   const cotizados = lics.map(() => 0);
@@ -467,7 +471,7 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
     const matSogrub = Number(cs.costoMaterialSogrub) || 0;
     totalCat += impCat;
 
-    // Precio comparable de cada licitante (destajo suma mat. SOGRUB)
+    // Precio comparable: destajo suma mat. SOGRUB. Subcontrato usa su P.U. directo.
     const comparables = lics.map(l => {
       const p = Number(l.precios?.[cs.conceptoId]);
       if (!Number.isFinite(p) || p <= 0) return null;
@@ -478,6 +482,10 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
 
     const row = [cat.clave || '', cat.descripcion || '', cat.unidad || '',
       num2(cant), money(puCat), money(impCat)];
+    if (hayDestajo) {
+      // Mostramos el mat. SOGRUB del concepto. Vacío si 0 para no saturar.
+      row.push(matSogrub > 0 ? money(matSogrub) : '—');
+    }
 
     lics.forEach((l, i) => {
       const p = Number(l.precios?.[cs.conceptoId]);
@@ -498,36 +506,43 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
 
   // Total row
   const totalRow = ['', '', '', '', 'TOTAL', money(totalCat)];
+  if (hayDestajo) totalRow.push('');
   lics.forEach((l, i) => {
     const t = totales[i];
     totalRow.push('', money(t), totalCat > 0 ? fmtPct((totalCat - t) / totalCat) : '—');
   });
   body.push(totalRow);
 
+  // Headers: el grupo "Catálogo" cubre P.U./Importe(/Mat. SOGRUB)
+  const head1Cols = ['', '', '', '', '', 'Catálogo'];
+  if (hayDestajo) head1Cols.push('Mat. SOGRUB');
+  for (const l of lics) {
+    const tipo = l.tipoSubcontratacion === 'destajo' ? '(D + mat)' : '';
+    head1Cols.push(`${l.nombre || ''} ${tipo}`, '', '');
+  }
+  const head2Cols = ['Clave', 'Descripción', 'U.', 'Cant.', 'P.U.', 'Importe'];
+  if (hayDestajo) head2Cols.push('P.U.');
+  for (let i = 0; i < lics.length; i++) head2Cols.push('P.U.', 'Importe', 'Ahorro %');
+
+  const columnStyles = {
+    0: { cellWidth: 50, font: 'courier' },
+    1: { cellWidth: 160 },
+    2: { cellWidth: 22, halign: 'center' },
+    3: { halign: 'right', cellWidth: 36 },
+    4: { halign: 'right', cellWidth: 48 },
+    5: { halign: 'right', cellWidth: 55 }
+  };
+  if (hayDestajo) {
+    columnStyles[6] = { halign: 'right', cellWidth: 50, fillColor: [255, 250, 230] };
+  }
+
   doc.autoTable({
     startY: 140,
-    head: [
-      ['', '', '', '', '', 'Catálogo',
-        ...lics.flatMap(l => {
-          const tipo = l.tipoSubcontratacion === 'destajo' ? '(D+mat)' : '';
-          return [`${l.nombre || ''} ${tipo}`, '', ''];
-        })
-      ],
-      ['Clave', 'Descripción', 'U.', 'Cant.', 'P.U.', 'Importe',
-        ...lics.flatMap(_ => ['P.U.', 'Importe', 'Ahorro %'])
-      ]
-    ],
+    head: [head1Cols, head2Cols],
     body,
     styles: { font: 'helvetica', fontSize: 7, cellPadding: 3, lineColor: [200, 210, 220], lineWidth: 0.3 },
     headStyles: { fillColor: [40, 50, 65], textColor: 230, fontStyle: 'bold', halign: 'center' },
-    columnStyles: {
-      0: { cellWidth: 50, font: 'courier' },
-      1: { cellWidth: 160 },
-      2: { cellWidth: 22, halign: 'center' },
-      3: { halign: 'right', cellWidth: 36 },
-      4: { halign: 'right', cellWidth: 48 },
-      5: { halign: 'right', cellWidth: 55 }
-    },
+    columnStyles,
     margin: { left: 20, right: 20, bottom: 60 },
     didDrawPage: (data) => drawFooter(doc, data)
   });

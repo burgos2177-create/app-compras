@@ -768,8 +768,13 @@ function renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, pr
     totalCatalogo += (Number(c.cantidad) || 0) * precioUnitarioOf(con);
   }
 
+  // Si hay al menos un destajista, mostramos columna "Mat. SOGRUB" para
+  // que el comprador vea explícitamente qué se está sumando al precio
+  // del destajo cuando lo evaluamos como comparable.
+  const hayDestajo = licEntries.some(([_, l]) => l.tipoSubcontratacion === 'destajo');
+
   // Construir filas con headers de partida insertados cuando cambia el path
-  const colspanCount = 3 + licEntries.length;
+  const colspanCount = (hayDestajo ? 4 : 3) + licEntries.length;
   const filas = [];
   let lastPath = [];
   for (const [cid, c] of sortedConceptos) {
@@ -785,19 +790,27 @@ function renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, pr
       filas.push(headerPartidaRow(ancestros[i], i, colspanCount));
     }
     lastPath = ancestros;
-    filas.push(licitanteFila(obraId, scId, cid, c, conceptos, licEntries, mejorPorConcepto[cid], editable, adjudicadoId));
+    filas.push(licitanteFila(obraId, scId, cid, c, conceptos, licEntries, mejorPorConcepto[cid], editable, adjudicadoId, hayDestajo));
   }
 
   return h('div', { class: 'card', style: { padding: 0 } }, [
     h('div', { style: { padding: '14px 18px 4px' } }, head),
-    h('div', { class: 'muted', style: { fontSize: '11px', padding: '0 18px 8px' } },
-      'Captura precios unitarios por celda. La celda en verde es el mejor precio de la fila (normalizado sin IVA si aplica). Ahorro % vs catálogo OPUS.'),
+    h('div', { class: 'muted', style: { fontSize: '11px', padding: '0 18px 8px' } }, [
+      'Captura precios unitarios por celda. La celda en verde es el mejor precio de la fila (normalizado sin IVA si aplica). Ahorro % vs catálogo OPUS.',
+      hayDestajo && h('span', { style: { marginLeft: '6px', color: 'var(--warn)' } },
+        '· "Mat. SOGRUB" se suma a los precios de destajistas para comparar.')
+    ]),
     h('div', { style: { overflow: 'auto', maxHeight: '70vh' } },
       h('table', { class: 'tbl' }, [
         h('thead', {}, h('tr', {}, [
           h('th', { style: { position: 'sticky', left: 0, background: 'var(--bg-2)', zIndex: 2, minWidth: '280px' } }, 'Concepto'),
           h('th', { class: 'num' }, 'Cantidad'),
           h('th', { class: 'num' }, 'P.U. Catálogo'),
+          hayDestajo && h('th', {
+            class: 'num',
+            style: { background: 'rgba(245, 196, 81, 0.06)' },
+            title: 'Costo de material/equipo que SOGRUB pondría si se contrata destajo (de la pestaña Alcance)'
+          }, 'Mat. SOGRUB'),
           ...licEntries.map(([licId, lic]) =>
             licColumnHeader(obraId, scId, licId, lic, totalesLic[licId], totalCatalogo, adjudicadoId === licId, editable))
         ])),
@@ -849,9 +862,10 @@ function licColumnHeader(obraId, scId, licId, lic, total, totalCat, esAdj, edita
   ]);
 }
 
-function licitanteFila(obraId, scId, cid, c, conceptos, licEntries, mejorLicId, editable, adjudicadoId) {
+function licitanteFila(obraId, scId, cid, c, conceptos, licEntries, mejorLicId, editable, adjudicadoId, hayDestajo) {
   const con = conceptos[c.conceptoId];
   const precioCat = precioUnitarioOf(con);
+  const matSogrub = Number(c.costoMaterialSogrub) || 0;
   return h('tr', {}, [
     h('td', { style: { maxWidth: '280px', position: 'sticky', left: 0, background: 'var(--bg-1)', zIndex: 1 } }, [
       h('div', { class: 'mono', style: { fontSize: '11px', color: 'var(--text-2)' } }, con?.clave || c.conceptoId.slice(0, 10)),
@@ -860,6 +874,15 @@ function licitanteFila(obraId, scId, cid, c, conceptos, licEntries, mejorLicId, 
     ]),
     h('td', { class: 'num' }, num(c.cantidad)),
     h('td', { class: 'num muted' }, precioCat > 0 ? money(precioCat) : '—'),
+    hayDestajo && h('td', {
+      class: 'num',
+      style: {
+        background: 'rgba(245, 196, 81, 0.04)',
+        color: matSogrub > 0 ? 'var(--text-1)' : 'var(--text-2)',
+        fontWeight: matSogrub > 0 ? '600' : 'normal'
+      },
+      title: 'Material/equipo SOGRUB que se suma a destajistas para comparar. Edita en pestaña Alcance.'
+    }, matSogrub > 0 ? money(matSogrub) : '—'),
     ...licEntries.map(([licId, lic]) =>
       precioCelda(obraId, scId, licId, lic, c, precioCat, licId === mejorLicId, editable, adjudicadoId === licId))
   ]);
