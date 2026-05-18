@@ -7,7 +7,8 @@ import {
   listProveedoresObra,
   listPreciosCatalogo,
   setPrecioCatalogo, removePrecioCatalogo,
-  listProveedoresGlobal, mergeProveedorObraConGlobal
+  listProveedoresGlobal, mergeProveedorObraConGlobal,
+  listSolicitudesCotizacion
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num, num0, money } from '../util/format.js';
@@ -28,12 +29,13 @@ export async function renderCatalogoPrecios({ params, query }) {
   setState({ obraActual: obraId });
   renderShell(crumbs(obraId, '...'), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const [meta, catMat, { proyectoId, items: provs }, precios, globales] = await Promise.all([
+  const [meta, catMat, { proyectoId, items: provs }, precios, globales, solicitudes] = await Promise.all([
     getObraMetaLegacy(obraId),
     loadCatalogoMateriales(obraId),
     listProveedoresObra(obraId),
     listPreciosCatalogo(obraId),
-    listProveedoresGlobal()
+    listProveedoresGlobal(),
+    listSolicitudesCotizacion(obraId)
   ]);
 
   if (!proyectoId) {
@@ -72,6 +74,7 @@ export async function renderCatalogoPrecios({ params, query }) {
   let soloIncompletos = query?.incompletos === '1';
   let provFiltro = query?.prov || '';            // provId o '' = todos
   let soloCotizados = query?.cotizados === '1';   // solo filas con al menos un precio
+  let solicitudFiltro = query?.solicitud || '';   // solId del preset o '' = ninguno
 
   // Familias para selector
   const familias = Array.from(new Set(matKeys.map(k => materiales[k].familia || '').filter(Boolean))).sort();
@@ -110,6 +113,20 @@ export async function renderCatalogoPrecios({ params, query }) {
   // Solo ya cotizados (filas con al menos un precio capturado)
   const cotizadosCb = h('input', { type: 'checkbox', checked: soloCotizados });
   cotizadosCb.addEventListener('change', () => { soloCotizados = cotizadosCb.checked; renderBody(); });
+
+  // Filtro por preset de solicitud de cotización (muestra solo los materiales
+  // que están en ese preset, útil para comparar contra los precios capturados)
+  const solicitudesOrden = Object.entries(solicitudes).sort(([, a], [, b]) =>
+    (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  const solicitudSel = h('select', {}, [
+    h('option', { value: '' }, 'Sin filtrar por solicitud'),
+    ...solicitudesOrden.map(([id, s]) => {
+      const n = Object.keys(s.items || {}).length;
+      return h('option', { value: id, selected: id === solicitudFiltro },
+        `${s.nombre || '(sin nombre)'} — ${n} item${n === 1 ? '' : 's'}`);
+    })
+  ]);
+  solicitudSel.addEventListener('change', () => { solicitudFiltro = solicitudSel.value; renderBody(); });
 
   const guardarBtn = h('button', { class: 'btn primary', disabled: true }, '💾 Guardar cambios (0)');
   guardarBtn.addEventListener('click', async () => {
@@ -177,19 +194,22 @@ export async function renderCatalogoPrecios({ params, query }) {
     navigate(`/obras/${obraId}/solicitar-cotizacion?materiales=${q}`);
   });
 
-  const filtros = h('div', { class: 'row', style: { marginBottom: '12px', gap: '10px' } }, [
-    search,
-    famSel,
-    provFiltroSel,
-    h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer', fontSize: '13px' } }, [
-      cotizadosCb, h('span', {}, 'Solo ya cotizados')
-    ]),
-    h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer', fontSize: '13px' } }, [
-      incompletosCb, h('span', {}, 'Solo incompletos')
-    ]),
-    h('div', { style: { flex: 1 } }),
-    solicitarBtn,
-    h('button', { class: 'btn ghost', onClick: () => navigate(`/obras/${obraId}/proveedores`) }, '🏷️ Gestionar proveedores')
+  const filtros = h('div', { style: { marginBottom: '12px' } }, [
+    h('div', { class: 'row', style: { gap: '10px' } }, [
+      search,
+      famSel,
+      provFiltroSel,
+      solicitudesOrden.length > 0 && solicitudSel,
+      h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer', fontSize: '13px' } }, [
+        cotizadosCb, h('span', {}, 'Solo ya cotizados')
+      ]),
+      h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer', fontSize: '13px' } }, [
+        incompletosCb, h('span', {}, 'Solo incompletos')
+      ]),
+      h('div', { style: { flex: 1 } }),
+      solicitarBtn,
+      h('button', { class: 'btn ghost', onClick: () => navigate(`/obras/${obraId}/proveedores`) }, '🏷️ Gestionar proveedores')
+    ])
   ]);
 
   // === Vacíos ===
@@ -224,6 +244,7 @@ export async function renderCatalogoPrecios({ params, query }) {
   }
 
   // === Render principal ===
+  const bannerEl = h('div', {});
   const tableWrap = h('div', { class: 'card', style: { padding: 0, overflow: 'auto', maxHeight: 'calc(100vh - 280px)' } });
   const sumaryEl = h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } });
 
@@ -258,9 +279,17 @@ export async function renderCatalogoPrecios({ params, query }) {
     // solo aparece si hace falta para los proveedores actualmente mostrados).
     const hayProvConIvaVisible = provsParaFila.some(p => p.aceptaSinIva === false);
 
+    // Subset por solicitud rápida (preset). Construimos un set con las
+    // claves del preset para filtrar abajo.
+    const solicitudActiva = solicitudFiltro ? solicitudes[solicitudFiltro] : null;
+    const matsDelPreset = solicitudActiva
+      ? new Set(Object.keys(solicitudActiva.items || {}))
+      : null;
+
     // Filtrar materiales
     const visibles = matKeys.filter(mk => {
       const m = materiales[mk];
+      if (matsDelPreset && !matsDelPreset.has(mk)) return false;
       if (filtro && !(`${m.clave || ''} ${m.descripcion || ''} ${m.marca || ''}`.toLowerCase().includes(filtro))) return false;
       if (famFiltro && m.familia !== famFiltro) return false;
       if (soloCotizados) {
@@ -290,10 +319,45 @@ export async function renderCatalogoPrecios({ params, query }) {
       const pName = provsConDatos.find(p => provIdOf(p) === provFiltro)?.nombre || '';
       detalleFiltros.push(`proveedor: ${pName}`);
     }
+    if (solicitudActiva) {
+      detalleFiltros.push(`solicitud: ${solicitudActiva.nombre || solicitudFiltro.slice(0, 6)}`);
+    }
     if (soloCotizados) detalleFiltros.push('solo cotizados');
     if (soloIncompletos) detalleFiltros.push('solo incompletos');
     const sufijo = detalleFiltros.length > 0 ? ` · filtros: ${detalleFiltros.join(', ')}` : '';
     sumaryEl.textContent = `Mostrando ${num0(visibles.length)} de ${num0(matKeys.length)} materiales${sufijo}.`;
+
+    // Banner contextual cuando hay solicitud filtrada
+    bannerEl.innerHTML = '';
+    if (solicitudActiva) {
+      const totalItems = Object.keys(solicitudActiva.items || {}).length;
+      const matsExistentes = visibles.length;
+      const matsNoEnCatalogo = totalItems - matsExistentes;
+      bannerEl.appendChild(h('div', {
+        style: {
+          padding: '10px 14px', marginBottom: '10px',
+          background: 'rgba(106, 169, 255, 0.07)',
+          border: '1px solid rgba(106, 169, 255, 0.3)',
+          borderRadius: '6px', fontSize: '12px',
+          display: 'flex', alignItems: 'center', gap: '10px'
+        }
+      }, [
+        h('span', { style: { fontSize: '14px' } }, '📁'),
+        h('span', { style: { flex: 1 } }, [
+          'Mostrando solo los ',
+          h('b', {}, num0(totalItems)),
+          ` materiales de la solicitud "${solicitudActiva.nombre || 'sin nombre'}"`,
+          matsNoEnCatalogo > 0
+            ? h('span', { class: 'muted' },
+              ` · ${num0(matsNoEnCatalogo)} no aparecen porque ya no están en el catálogo`)
+            : null
+        ]),
+        h('a', {
+          href: `#/obras/${obraId}/solicitar-cotizacion?solicitud=${solicitudFiltro}`,
+          style: { fontSize: '12px' }
+        }, 'Ver / editar solicitud →')
+      ]));
+    }
 
     // Header
     const thead = h('thead', {}, h('tr', {}, [
@@ -462,7 +526,7 @@ export async function renderCatalogoPrecios({ params, query }) {
   }
 
   renderBody();
-  renderShell(crumbs(obraId, meta?.nombre), h('div', {}, [head, filtros, tableWrap, sumaryEl]));
+  renderShell(crumbs(obraId, meta?.nombre), h('div', {}, [head, filtros, bannerEl, tableWrap, sumaryEl]));
 }
 
 function crumbs(obraId, nombre) {
