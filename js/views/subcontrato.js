@@ -686,8 +686,12 @@ function renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, pr
     ]);
   }
 
-  // Ordenar conceptos por clave
+  // Ordenar conceptos por orden secuencial OPUS para que la jerarquía
+  // (las partidas) salga en el orden natural del XLS.
   const sortedConceptos = conceptoEntries.sort(([, a], [, b]) => {
+    const oa = conceptos[a.conceptoId]?.orden ?? Number.MAX_SAFE_INTEGER;
+    const ob = conceptos[b.conceptoId]?.orden ?? Number.MAX_SAFE_INTEGER;
+    if (oa !== ob) return oa - ob;
     const ca = conceptos[a.conceptoId]?.clave || '';
     const cb = conceptos[b.conceptoId]?.clave || '';
     return ca.localeCompare(cb);
@@ -727,6 +731,26 @@ function renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, pr
     totalCatalogo += (Number(c.cantidad) || 0) * precioUnitarioOf(con);
   }
 
+  // Construir filas con headers de partida insertados cuando cambia el path
+  const colspanCount = 3 + licEntries.length;
+  const filas = [];
+  let lastPath = [];
+  for (const [cid, c] of sortedConceptos) {
+    const con = conceptos[c.conceptoId];
+    const ancestros = (con?.path || []).slice(0, -1);
+    let primerDif = 0;
+    while (
+      primerDif < lastPath.length && primerDif < ancestros.length
+      && lastPath[primerDif].clave === ancestros[primerDif].clave
+      && lastPath[primerDif].descripcion === ancestros[primerDif].descripcion
+    ) primerDif++;
+    for (let i = primerDif; i < ancestros.length; i++) {
+      filas.push(headerPartidaRow(ancestros[i], i, colspanCount));
+    }
+    lastPath = ancestros;
+    filas.push(licitanteFila(obraId, scId, cid, c, conceptos, licEntries, mejorPorConcepto[cid], editable, adjudicadoId));
+  }
+
   return h('div', { class: 'card', style: { padding: 0 } }, [
     h('div', { style: { padding: '14px 18px 4px' } }, head),
     h('div', { class: 'muted', style: { fontSize: '11px', padding: '0 18px 8px' } },
@@ -740,9 +764,7 @@ function renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, pr
           ...licEntries.map(([licId, lic]) =>
             licColumnHeader(obraId, scId, licId, lic, totalesLic[licId], totalCatalogo, adjudicadoId === licId, editable))
         ])),
-        h('tbody', {},
-          sortedConceptos.map(([cid, c]) =>
-            licitanteFila(obraId, scId, cid, c, conceptos, licEntries, mejorPorConcepto[cid], editable, adjudicadoId)))
+        h('tbody', {}, filas)
       ])
     )
   ]);
