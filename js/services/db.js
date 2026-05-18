@@ -566,6 +566,137 @@ export async function removeSubcontratoLicitante(obraId, scId, licId) {
   await updateSubcontratoMeta(obraId, scId, {});
 }
 
+// === Migración legacy de subcontratos (Fase 3) ===
+//
+// app-estimaciones fue el escritor original de subcontratos antes de que
+// compras tomara el control. Los datos viejos viven en
+// /legacy/estimaciones/obras/{obraId}/subcontratos/ con shape distinto:
+//   conceptos: [{ conceptoId, cantidadSub }]
+//   licitantes: { [licId]: { nombre, email, precios, ... } }   (sin tipoSub, sin RFC)
+//
+// La migración copia cada subcontrato legacy NO migrado a
+// /shared/compras/obras/{obraId}/subcontratos/{scId} preservando el mismo
+// scId — eso es crítico para que las estimaciones parciales (que se quedan
+// viviendo en el path legacy) sigan ligadas al subcontrato adaptado.
+//
+// Marcamos el legacy con `meta.migradoACompras=<scId>` para no migrar dos
+// veces y para que la app de estimaciones sepa que ese registro ya es solo
+// histórico del shape viejo (loadObra ya prioriza el del shared).
+
+export async function listSubcontratosLegacy(obraId) {
+  return (await rread(`/legacy/estimaciones/obras/${obraId}/subcontratos`)) || {};
+}
+
+export async function listSubcontratosLegacyCandidatos(obraId) {
+  const [legacy, shared] = await Promise.all([
+    listSubcontratosLegacy(obraId),
+    rread(`obras/${obraId}/subcontratos`)
+  ]);
+  const yaEnShared = new Set(Object.keys(shared || {}));
+  const out = [];
+  for (const [scId, sc] of Object.entries(legacy)) {
+    if (!sc) continue;
+    if (yaEnShared.has(scId)) continue;
+    if (sc.meta?.migradoACompras) continue;
+    out.push({ scId, sub: sc });
+  }
+  return out;
+}
+
+// Convierte un subcontrato legacy al shape de compras y lo escribe con el
+// MISMO scId. Las estimaciones parciales no se tocan — siguen en
+// /legacy/estimaciones/obras/{obraId}/subcontratos/{scId}/estimaciones y
+// estimaciones las hidrata transparentemente al cargar la obra.
+export async function migrarSubcontratoLegacy(obraId, scId, legacySub) {
+  // Conceptos: array → objeto. Generamos IDs estables basados en el conceptoId
+  // para que re-migraciones produzcan las mismas keys (idempotente).
+  const conceptosObj = {};
+  for (const cs of (legacySub.conceptos || [])) {
+    if (!cs?.conceptoId) continue;
+    const cid = 'cn_mig_' + String(cs.conceptoId).replace(/[^a-z0-9]/gi, '').slice(0, 16);
+    // Evitar colisiones si el mismo conceptoId aparece dos veces
+    let suffix = 0;
+    let finalKey = cid;
+    while (conceptosObj[finalKey]) {
+      suffix++;
+      finalKey = `${cid}_${suffix}`;
+    }
+    conceptosObj[finalKey] = {
+      conceptoId: cs.conceptoId,
+      cantidad: Number(cs.cantidadSub) || 0,
+      costoMaterialSogrub: 0,
+      notas: cs.notas || ''
+    };
+  }
+
+  // Licitantes: preservar keys. Agregar campos nuevos con defaults sensatos
+  // (subcontrato completo, sin IVA, sin provId — el comprador puede vincular
+  // al catálogo de proveedores después).
+  const licitantesObj = {};
+  for (const [licId, lic] of Object.entries(legacySub.licitantes || {})) {
+    if (!lic) continue;
+    licitantesObj[licId] = {
+      provId: null,
+      nombre: lic.nombre || '',
+      rfc: lic.rfc || '',
+      email: lic.email || '',
+      telefono: lic.telefono || '',
+      contacto: lic.contacto || '',
+      aceptaSinIva: true,
+      tipoSubcontratacion: 'subcontrato',
+      precios: lic.precios || {},
+      notas: lic.notas || '',
+      fechaCotizacion: lic.fechaCotizacion || Date.now(),
+      archivado: !!lic.archivado,
+      licCatalogId: lic.licCatalogId || null   // referencia al catálogo viejo, audit
+    };
+  }
+
+  const adjudicado = legacySub.meta?.estado === 'adjudicado' && legacySub.meta?.licitanteAdjudicadoId;
+  await rset(`obras/${obraId}/subcontratos/${scId}`, {
+    meta: {
+      nombre: legacySub.meta?.nombre || 'Subcontrato (migrado)',
+      descripcion: legacySub.meta?.descripcion || '',
+      estado: adjudicado ? 'adjudicado' : 'cotizando',
+      licitanteAdjudicadoId: legacySub.meta?.licitanteAdjudicadoId || null,
+      adjudicadoAt: legacySub.meta?.adjudicadoAt || null,
+      createdAt: legacySub.meta?.createdAt || Date.now(),
+      updatedAt: Date.now(),
+      migradoDesdeLegacy: true,
+      migradoAt: Date.now()
+    },
+    conceptos: conceptosObj,
+    licitantes: licitantesObj
+  });
+
+  // Marcar el legacy para no re-migrar
+  await rupdate(`/legacy/estimaciones/obras/${obraId}/subcontratos/${scId}/meta`, {
+    migradoACompras: scId,
+    migradoAt: Date.now()
+  });
+
+  return scId;
+}
+
+// Migra todos (o un subset) de los subcontratos legacy candidatos.
+// `scIds` es opcional: si se omite, migra TODOS los candidatos.
+export async function migrarSubcontratosLegacy(obraId, scIds = null) {
+  const candidatos = await listSubcontratosLegacyCandidatos(obraId);
+  const target = scIds
+    ? candidatos.filter(c => scIds.includes(c.scId))
+    : candidatos;
+  const migrados = [];
+  for (const { scId, sub } of target) {
+    try {
+      await migrarSubcontratoLegacy(obraId, scId, sub);
+      migrados.push({ scId, nombre: sub.meta?.nombre || '' });
+    } catch (err) {
+      console.error(`[migración] fallo en ${scId}:`, err);
+    }
+  }
+  return migrados;
+}
+
 // Adjudicación
 export async function adjudicarSubcontrato(obraId, scId, licId) {
   await updateSubcontratoMeta(obraId, scId, {
