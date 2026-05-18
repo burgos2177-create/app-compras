@@ -184,12 +184,40 @@ function renderAlcance(obraId, scId, scConceptos, conceptos, editable) {
     ]);
   }
 
-  // Ordenar por clave OPUS
+  // Ordenar por orden secuencial OPUS del catálogo (preserva la jerarquía
+  // tal como aparece en el XLS original — las partidas van apareciendo en
+  // orden natural).
   const sorted = entries.sort(([, a], [, b]) => {
+    const oa = conceptos[a.conceptoId]?.orden ?? Number.MAX_SAFE_INTEGER;
+    const ob = conceptos[b.conceptoId]?.orden ?? Number.MAX_SAFE_INTEGER;
+    if (oa !== ob) return oa - ob;
+    // fallback por clave
     const ca = conceptos[a.conceptoId]?.clave || '';
     const cb = conceptos[b.conceptoId]?.clave || '';
     return ca.localeCompare(cb);
   });
+
+  // Construir filas con headers de partida cuando cambia el path de ancestros
+  const colspanCount = editable ? 9 : 8;
+  const filas = [];
+  let lastPath = [];   // ancestros (sin el propio concepto)
+  for (const [cid, c] of sorted) {
+    const con = conceptos[c.conceptoId];
+    const ancestros = (con?.path || []).slice(0, -1);
+    // Encontrar primer índice donde la nueva ruta diverge de la última
+    let primerDif = 0;
+    while (
+      primerDif < lastPath.length && primerDif < ancestros.length
+      && lastPath[primerDif].clave === ancestros[primerDif].clave
+      && lastPath[primerDif].descripcion === ancestros[primerDif].descripcion
+    ) primerDif++;
+    // Emitir headers para los ancestros nuevos
+    for (let i = primerDif; i < ancestros.length; i++) {
+      filas.push(headerPartidaRow(ancestros[i], i, colspanCount));
+    }
+    lastPath = ancestros;
+    filas.push(conceptoAlcanceRow(obraId, scId, cid, c, conceptos, editable));
+  }
 
   return h('div', { class: 'card', style: { padding: 0 } }, [
     h('div', { style: { padding: '14px 18px 4px' } }, head),
@@ -207,9 +235,35 @@ function renderAlcance(obraId, scId, scConceptos, conceptos, editable) {
         h('th', {}, 'Notas'),
         editable && h('th', {}, '')
       ])),
-      h('tbody', {}, sorted.map(([cid, c]) => conceptoAlcanceRow(obraId, scId, cid, c, conceptos, editable)))
+      h('tbody', {}, filas)
     ])
   ]);
+}
+
+// Fila de header de partida (agrupador) en la tabla del alcance.
+// Estilo: banda con fondo de acento si es nivel 0, gris suave en niveles
+// internos. Indentación visual según nivel.
+function headerPartidaRow(ancestor, nivel, colspan) {
+  const bg = nivel === 0
+    ? 'rgba(106, 169, 255, 0.10)'
+    : 'rgba(108, 115, 132, 0.06)';
+  return h('tr', {}, h('td', {
+    colspan: colspan,
+    style: {
+      background: bg,
+      padding: '6px 10px 6px ' + (10 + nivel * 16) + 'px',
+      borderBottom: '1px solid var(--border-strong)',
+      borderTop: '1px solid var(--border-strong)'
+    }
+  }, [
+    h('span', {
+      class: 'mono',
+      style: { fontSize: '11px', color: 'var(--accent)', fontWeight: '600', marginRight: '10px' }
+    }, ancestor.clave || ''),
+    h('span', {
+      style: { fontSize: '12px', fontWeight: '600', color: 'var(--text-0)', textTransform: 'uppercase', letterSpacing: '0.3px' }
+    }, ancestor.descripcion || '—')
+  ]));
 }
 
 function conceptoAlcanceRow(obraId, scId, cid, c, conceptos, editable) {
