@@ -14,6 +14,11 @@ import {
 import { navigate } from '../state/router.js';
 import { dateMx, num, num0, money } from '../util/format.js';
 import { estadoSCBadge } from './subcontratos.js';
+import {
+  exportLicitanteXlsxCompras, exportLicitantePdfCompras,
+  parseLicitanteXlsxCompras,
+  exportComparativaXlsxCompras, exportComparativaPdfCompras
+} from '../services/subcontrato-export.js';
 
 // Helpers tolerantes al shape del catálogo unificado.
 // El catálogo en /shared/catalogos/{obraId}/conceptos usa snake_case
@@ -142,7 +147,7 @@ export async function renderSubcontratoDetalle({ params, query }) {
   if (tab === 'alcance') {
     tabBody = renderAlcance(obraId, scId, scConceptos, conceptos, editable);
   } else if (tab === 'licitantes') {
-    tabBody = renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, proveedoresObra, editable, scMeta);
+    tabBody = renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, proveedoresObra, editable, scMeta, meta);
   } else {
     tabBody = renderAdjudicacion(obraId, scId, scConceptos, scLicitantes, conceptos, scMeta, editable);
   }
@@ -653,14 +658,46 @@ async function onQuitarConcepto(obraId, scId, cid) {
 
 // ====================== TAB: LICITANTES ======================
 
-function renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, proveedoresObra, editable, scMeta) {
+function renderLicitantes(obraId, scId, scConceptos, scLicitantes, conceptos, proveedoresObra, editable, scMeta, obraMeta) {
   const conceptoEntries = Object.entries(scConceptos);
   const licEntries = Object.entries(scLicitantes);
   const adjudicadoId = scMeta.licitanteAdjudicadoId;
 
+  // Construir objetos para los exports (shape esperado por el módulo)
+  const subParaExport = {
+    meta: scMeta,
+    conceptos: scConceptos,
+    licitantes: scLicitantes
+  };
+  const obraParaExport = { meta: obraMeta || {} };
+
   const head = h('div', { class: 'row' }, [
     h('h3', { style: { margin: 0, flex: 1 } },
       `Licitantes (${num0(licEntries.length)})`),
+    // Exports siempre disponibles
+    conceptoEntries.length > 0 && h('button', {
+      class: 'btn sm ghost',
+      onClick: () => exportLicitantePdfCompras(obraParaExport, subParaExport, conceptos),
+      title: 'PDF de invitación a cotizar (formato carta para mandar al proveedor)'
+    }, '📄 PDF invitación'),
+    conceptoEntries.length > 0 && h('button', {
+      class: 'btn sm ghost',
+      onClick: () => exportLicitanteXlsxCompras(obraParaExport, subParaExport, scId, conceptos),
+      title: 'XLSX template para que el licitante llene precios'
+    }, '📊 XLSX template'),
+    licEntries.length > 0 && h('button', {
+      class: 'btn sm ghost',
+      onClick: () => exportComparativaXlsxCompras(obraParaExport, subParaExport, conceptos)
+    }, '⬇ Comparativa XLSX'),
+    licEntries.length > 0 && h('button', {
+      class: 'btn sm ghost',
+      onClick: () => exportComparativaPdfCompras(obraParaExport, subParaExport, conceptos)
+    }, '⬇ Comparativa PDF'),
+    editable && conceptoEntries.length > 0 && h('button', {
+      class: 'btn sm ghost',
+      onClick: () => importLicitanteXlsxFlow(obraId, scId, subParaExport, conceptos),
+      title: 'Importar respuesta de licitante (XLSX que mandaste y te devolvió lleno)'
+    }, '📥 Importar XLSX'),
     editable && h('button', {
       class: 'btn sm primary',
       onClick: () => onAgregarLicitante(obraId, scId, scConceptos, scLicitantes, proveedoresObra)
@@ -931,6 +968,118 @@ function precioCelda(obraId, scId, licId, lic, c, precioCat, esMejor, editable, 
     },
     title: titleParts.join(' · ')
   }, [input, ...subLineas]);
+}
+
+async function importLicitanteXlsxFlow(obraId, scId, subParaExport, conceptos) {
+  // Picker de archivo nativo
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.xlsx,.xls';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+
+  const file = await new Promise((resolve) => {
+    input.addEventListener('change', () => resolve(input.files?.[0] || null));
+    input.click();
+  });
+  input.remove();
+  if (!file) return;
+
+  let parsed;
+  try {
+    parsed = await parseLicitanteXlsxCompras(file, subParaExport, conceptos);
+  } catch (err) {
+    toast('No se pudo parsear el archivo: ' + err.message, 'danger');
+    return;
+  }
+
+  if (parsed.foundCount === 0) {
+    toast('El archivo no tenía precios válidos para los conceptos del alcance', 'danger');
+    return;
+  }
+
+  // Mostrar resumen y permitir editar datos del licitante antes de guardar
+  const nombreIn = h('input', { value: parsed.nombre || '', placeholder: 'Nombre del licitante *' });
+  const rfcIn = h('input', { value: parsed.rfc || '', placeholder: 'RFC (opcional)' });
+  const emailIn = h('input', { type: 'email', value: parsed.email || '' });
+  const telIn = h('input', { value: parsed.telefono || '' });
+  const contactoIn = h('input', { value: parsed.contacto || '' });
+  const tipoSel = h('select', {}, [
+    h('option', { value: 'subcontrato', selected: parsed.tipoSubcontratacion !== 'destajo' }, 'Subcontrato (MO + material + equipo)'),
+    h('option', { value: 'destajo', selected: parsed.tipoSubcontratacion === 'destajo' }, 'Destajo (solo MO)')
+  ]);
+  const ivaCb = h('input', { type: 'checkbox', checked: true });
+
+  await modal({
+    title: 'Importar respuesta de licitante',
+    size: 'lg',
+    body: h('div', {}, [
+      h('div', {
+        class: 'tag ok',
+        style: { display: 'block', marginBottom: '12px', whiteSpace: 'normal' }
+      }, [
+        `✓ Se leyeron `, h('b', {}, num0(parsed.foundCount)),
+        ` precios válidos`, parsed.isOurTemplate ? ' del template generado por compras' : ' del archivo'
+      ]),
+      parsed.unmatched.length > 0 && h('div', {
+        class: 'tag warn',
+        style: { display: 'block', marginBottom: '12px', whiteSpace: 'normal' }
+      }, [
+        `⚠ ${parsed.unmatched.length} clave${parsed.unmatched.length === 1 ? '' : 's'} en el archivo no `,
+        `corresponde${parsed.unmatched.length === 1 ? '' : 'n'} a ningún concepto del alcance: `,
+        h('span', { class: 'mono', style: { fontSize: '11px' } }, parsed.unmatched.slice(0, 8).join(', ')),
+        parsed.unmatched.length > 8 ? '…' : ''
+      ]),
+      h('h3', { style: { marginTop: '4px' } }, 'Datos del licitante'),
+      h('div', { class: 'field' }, [h('label', {}, 'Nombre *'), nombreIn]),
+      h('div', { class: 'grid-2' }, [
+        h('div', { class: 'field' }, [h('label', {}, 'RFC'), rfcIn]),
+        h('div', { class: 'field' }, [h('label', {}, 'Teléfono'), telIn])
+      ]),
+      h('div', { class: 'grid-2' }, [
+        h('div', { class: 'field' }, [h('label', {}, 'Email'), emailIn]),
+        h('div', { class: 'field' }, [h('label', {}, 'Contacto'), contactoIn])
+      ]),
+      h('div', { class: 'field' }, [
+        h('label', {}, 'Tipo de cotización'),
+        tipoSel,
+        h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
+          parsed.tipoSubcontratacion === 'destajo'
+            ? 'Detectado como destajo en el archivo. Verifica.'
+            : 'Si es destajo (solo MO), cámbialo aquí — los precios sumarán el Material SOGRUB del alcance.')
+      ]),
+      h('div', { style: { padding: '8px 10px', background: 'var(--bg-2)', borderRadius: '6px', marginTop: '8px' } }, [
+        h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer' } }, [
+          ivaCb,
+          h('span', {}, h('b', {}, 'Acepta transacciones sin IVA'))
+        ])
+      ])
+    ]),
+    confirmLabel: 'Importar como licitante',
+    onConfirm: async () => {
+      const nombre = nombreIn.value.trim();
+      if (!nombre) { toast('Captura el nombre', 'danger'); return false; }
+      try {
+        await addSubcontratoLicitante(obraId, scId, {
+          provId: null,
+          nombre,
+          rfc: rfcIn.value.trim(),
+          email: emailIn.value.trim(),
+          telefono: telIn.value.trim(),
+          contacto: contactoIn.value.trim(),
+          aceptaSinIva: ivaCb.checked,
+          tipoSubcontratacion: tipoSel.value,
+          precios: parsed.precios,
+          notas: parsed.unmatched.length > 0
+            ? `Importado de XLSX. ${parsed.unmatched.length} claves del archivo no se encontraron en el alcance.`
+            : 'Importado de XLSX.'
+        });
+        toast(`Licitante "${nombre}" importado con ${parsed.foundCount} precio${parsed.foundCount === 1 ? '' : 's'}`, 'ok');
+        navigate(`/obras/${obraId}/subcontratos/${scId}?tab=licitantes`);
+        return true;
+      } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+    }
+  });
 }
 
 async function onAgregarLicitante(obraId, scId, scConceptos, scLicitantes, proveedoresObra) {
