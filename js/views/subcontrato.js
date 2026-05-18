@@ -23,14 +23,20 @@ function precioUnitarioOf(con) {
   if (!con) return 0;
   return Number(con.precio_unitario ?? con.precioUnitario) || 0;
 }
-// Un concepto es "cotizable" si es PU explícito, o si no tiene tipo asignado
-// pero tampoco es agrupador (defensa contra catálogos sin tipo bien marcado).
+// Un concepto es "cotizable" si:
+//   - tipo='precio_unitario' explícito, o
+//   - es un agrupador CON precio o cantidad propios (común en OPUS: Z1 puede
+//     ser agrupador que envuelve sub-zapatas Z1-001/Z1-002 y a la vez tener
+//     su propia entrada cotizable. El usuario decide si subcontrata Z1 como
+//     bloque o sus sub-conceptos por separado).
+//   - sin tipo definido pero con precio o cantidad (defensa contra registros
+//     mal etiquetados).
 function esConceptoCotizable(con) {
   if (!con) return false;
   if (con.tipo === 'precio_unitario') return true;
-  if (con.tipo === 'agrupador') return false;
-  // Sin tipo definido: si tiene precio_unitario o cantidad, lo tratamos como PU
-  return precioUnitarioOf(con) > 0 || Number(con.cantidad) > 0;
+  const tieneValor = precioUnitarioOf(con) > 0 || Number(con.cantidad) > 0;
+  if (con.tipo === 'agrupador') return tieneValor;
+  return tieneValor;
 }
 
 // Detalle de subcontrato con 3 tabs:
@@ -357,6 +363,7 @@ async function onAgregarConcepto(obraId, scId, scConceptos, conceptos) {
 
   function filaPU(pu, yaIncluido) {
     const lvl = pu.nivel || 0;
+    const esAgrupadorCotizable = pu.tipo === 'agrupador';
     const sel = seleccionados.get(pu.cid);
     const checked = !!sel;
     const cb = h('input', { type: 'checkbox', checked, disabled: yaIncluido });
@@ -407,7 +414,14 @@ async function onAgregarConcepto(obraId, scId, scConceptos, conceptos) {
       }
     }, [
       cb,
-      h('div', { class: 'mono', style: { fontSize: '11px', color: 'var(--text-2)' } }, pu.clave || pu.cid.slice(0, 10)),
+      h('div', { class: 'mono', style: { fontSize: '11px', color: 'var(--text-2)' } }, [
+        pu.clave || pu.cid.slice(0, 10),
+        esAgrupadorCotizable && h('span', {
+          class: 'tag',
+          style: { marginLeft: '4px', fontSize: '9px', padding: '0 4px' },
+          title: 'Es un agrupador con precio propio. Lo puedes contratar como bloque o por sus sub-conceptos.'
+        }, 'BLOQUE')
+      ]),
       h('div', { style: { fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: pu.descripcion },
         (pu.descripcion || '').slice(0, 80) +
         (yaIncluido ? ' · ya en alcance' : '')),
