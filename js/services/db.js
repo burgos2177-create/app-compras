@@ -491,6 +491,25 @@ export async function addSubcontratoConcepto(obraId, scId, data) {
   await updateSubcontratoMeta(obraId, scId, {});
   return id;
 }
+
+// Bulk: agrega varios conceptos al alcance en una sola operación. Útil cuando
+// se selecciona una partida completa o múltiples conceptos en el picker.
+// `items` es un array de { conceptoId, cantidad, notas? }.
+export async function addSubcontratoConceptosBulk(obraId, scId, items) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const ids = [];
+  await Promise.all(items.map(async (data) => {
+    const id = 'cn_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    await rset(`obras/${obraId}/subcontratos/${scId}/conceptos/${id}`, {
+      conceptoId: data.conceptoId,
+      cantidad: Number(data.cantidad) || 0,
+      notas: data.notas || ''
+    });
+    ids.push(id);
+  }));
+  await updateSubcontratoMeta(obraId, scId, {});
+  return ids;
+}
 export async function updateSubcontratoConcepto(obraId, scId, cid, patch) {
   await rupdate(`obras/${obraId}/subcontratos/${scId}/conceptos/${cid}`, patch);
   await updateSubcontratoMeta(obraId, scId, {});

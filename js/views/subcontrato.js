@@ -3,7 +3,8 @@ import { renderShell } from './shell.js';
 import { state, setState } from '../state/store.js';
 import {
   getObraMetaLegacy, getSubcontrato, updateSubcontratoMeta,
-  addSubcontratoConcepto, removeSubcontratoConcepto, updateSubcontratoConcepto,
+  addSubcontratoConcepto, addSubcontratoConceptosBulk,
+  removeSubcontratoConcepto, updateSubcontratoConcepto,
   addSubcontratoLicitante, updateSubcontratoLicitante, removeSubcontratoLicitante,
   setSubcontratoLicitantePrecio,
   adjudicarSubcontrato, desadjudicarSubcontrato,
@@ -198,68 +199,284 @@ function conceptoAlcanceRow(obraId, scId, cid, c, conceptos, editable) {
 
 async function onAgregarConcepto(obraId, scId, scConceptos, conceptos) {
   const yaEnAlcance = new Set(Object.values(scConceptos).map(c => c.conceptoId));
-  const disponibles = Object.entries(conceptos)
-    .filter(([cid]) => !yaEnAlcance.has(cid))
-    .map(([cid, con]) => ({ cid, ...con }));
 
-  if (disponibles.length === 0) {
-    toast('Ya están todos los conceptos del catálogo en este alcance', 'warn');
-    return;
-  }
+  // Construir lista ordenada de TODOS los conceptos del catálogo (agrupadores
+  // + PU) respetando orden secuencial OPUS — eso preserva la jerarquía visual.
+  const todos = Object.entries(conceptos)
+    .map(([cid, con]) => ({ cid, ...con }))
+    .sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
 
-  const search = h('input', { placeholder: 'Buscar por clave o descripción…', autofocus: true });
-  const list = h('div', { style: { maxHeight: '320px', overflow: 'auto' } });
-  const cantidad = h('input', { type: 'number', step: '0.01', min: '0', value: '0' });
-  const notas = h('input', { placeholder: 'Notas (opcional)' });
-  let selected = null;
-
-  function refresh() {
-    list.innerHTML = '';
-    const q = search.value.trim().toLowerCase();
-    const visibles = disponibles.filter(c =>
-      !q || `${c.clave || ''} ${c.descripcion || ''}`.toLowerCase().includes(q)
-    ).slice(0, 100);
-    for (const c of visibles) {
-      const row = h('div', {
-        style: {
-          padding: '6px 10px', cursor: 'pointer',
-          borderBottom: '1px solid var(--border)',
-          background: selected === c.cid ? 'var(--bg-3)' : 'transparent'
-        }
-      }, [
-        h('div', { class: 'mono', style: { fontSize: '11px', color: 'var(--text-2)' } }, c.clave || c.cid.slice(0, 10)),
-        h('div', { style: { fontSize: '12px' } }, (c.descripcion || '').slice(0, 80))
-      ]);
-      row.addEventListener('click', () => { selected = c.cid; refresh(); });
-      list.appendChild(row);
+  // Mapa "agrupador → lista de PUs descendientes" para botón "Agregar partida".
+  // Un PU "pertenece" a un agrupador si el agrupador está en su path.
+  const pusPorAgrupador = new Map();   // agrupadorCid → [puCid, ...]
+  for (const con of todos) {
+    if (con.tipo !== 'precio_unitario') continue;
+    if (yaEnAlcance.has(con.cid)) continue;
+    // Buscar todos los agrupadores ancestros en `todos` (mismo path)
+    for (const ag of (con.path || []).slice(0, -1)) {   // path incluye al propio PU al final
+      // Buscar agrupador por clave en `todos`
+      const agNode = todos.find(x => x.tipo === 'agrupador' && x.clave === ag.clave && x.descripcion === ag.descripcion);
+      if (!agNode) continue;
+      if (!pusPorAgrupador.has(agNode.cid)) pusPorAgrupador.set(agNode.cid, []);
+      pusPorAgrupador.get(agNode.cid).push(con.cid);
     }
   }
-  search.addEventListener('input', refresh);
-  refresh();
 
-  await modal({
-    title: 'Agregar concepto al alcance',
-    body: h('div', {}, [
-      h('div', { class: 'field' }, [h('label', {}, 'Buscar concepto'), search]),
-      h('div', { class: 'card', style: { padding: 0, marginTop: '6px' } }, list),
-      h('div', { class: 'grid-2', style: { marginTop: '10px' } }, [
-        h('div', { class: 'field' }, [h('label', {}, 'Cantidad *'), cantidad]),
-        h('div', { class: 'field' }, [h('label', {}, 'Notas'), notas])
-      ])
-    ]),
-    confirmLabel: 'Agregar', size: 'lg',
-    onConfirm: async () => {
-      if (!selected) { toast('Elige un concepto', 'danger'); return false; }
-      const cant = Number(cantidad.value);
-      if (!cant || cant <= 0) { toast('Cantidad inválida', 'danger'); return false; }
-      try {
-        await addSubcontratoConcepto(obraId, scId, { conceptoId: selected, cantidad: cant, notas: notas.value.trim() });
-        toast('Concepto agregado al alcance', 'ok');
-        navigate(`/obras/${obraId}/subcontratos/${scId}?tab=alcance`);
-        return true;
-      } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+  // Estado de selección: cid → { cantidad: number }
+  const seleccionados = new Map();
+  // Estado de filtros
+  let busqueda = '';
+  let soloPendientes = true;
+
+  // Refs DOM
+  const search = h('input', { placeholder: 'Buscar por clave o descripción…', autofocus: true });
+  const soloPendCb = h('input', { type: 'checkbox', checked: true });
+  const lista = h('div', { style: { maxHeight: '52vh', overflow: 'auto', border: '1px solid var(--border)', borderRadius: '6px', background: 'var(--bg-2)' } });
+  const contadorEl = h('div', { class: 'muted', style: { fontSize: '12px' } }, '');
+
+  search.addEventListener('input', () => { busqueda = search.value.trim().toLowerCase(); render(); });
+  soloPendCb.addEventListener('change', () => { soloPendientes = soloPendCb.checked; render(); });
+
+  const actualizarContador = () => {
+    const total = seleccionados.size;
+    const importe = Array.from(seleccionados.entries()).reduce((sum, [cid, sel]) => {
+      const con = conceptos[cid];
+      const pu = Number(con?.precioUnitario) || 0;
+      return sum + (Number(sel.cantidad) || 0) * pu;
+    }, 0);
+    contadorEl.textContent = total === 0
+      ? 'Selecciona conceptos para agregar al alcance.'
+      : `${total} concepto${total === 1 ? '' : 's'} seleccionado${total === 1 ? '' : 's'} · importe a catálogo: $${importe.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    if (confirmarBtn) {
+      confirmarBtn.disabled = total === 0;
+      confirmarBtn.textContent = total === 0
+        ? 'Agregar 0 conceptos'
+        : `Agregar ${total} concepto${total === 1 ? '' : 's'}`;
+    }
+  };
+
+  function render() {
+    lista.innerHTML = '';
+    let visibles = 0;
+    for (const con of todos) {
+      // Filtros — el match aplica a agrupadores Y PUs. Si un PU matchea, también
+      // mostramos su agrupador padre para no perder contexto.
+      const yaIncluido = yaEnAlcance.has(con.cid);
+      if (con.tipo === 'precio_unitario') {
+        if (soloPendientes && yaIncluido) continue;
+        if (busqueda && !(`${con.clave || ''} ${con.descripcion || ''}`.toLowerCase().includes(busqueda))) continue;
+        lista.appendChild(filaPU(con, yaIncluido));
+        visibles++;
+      } else {
+        // Agrupador: mostrarlo si tiene al menos un PU visible bajo él, o si su
+        // propia descripción matchea la búsqueda
+        const matchPropio = !busqueda || `${con.clave || ''} ${con.descripcion || ''}`.toLowerCase().includes(busqueda);
+        const descendientesDisponibles = (pusPorAgrupador.get(con.cid) || [])
+          .filter(puCid => {
+            const pu = conceptos[puCid];
+            if (!pu) return false;
+            if (busqueda && !(`${pu.clave || ''} ${pu.descripcion || ''}`.toLowerCase().includes(busqueda))) return false;
+            return true;
+          });
+        if (!matchPropio && descendientesDisponibles.length === 0) continue;
+        lista.appendChild(filaAgrupador(con, descendientesDisponibles));
+        visibles++;
+      }
+    }
+    if (visibles === 0) {
+      lista.appendChild(h('div', { class: 'empty', style: { padding: '30px' } },
+        h('div', { class: 'muted' }, 'Sin coincidencias.')));
+    }
+    actualizarContador();
+  }
+
+  function filaAgrupador(ag, pusDisponibles) {
+    const lvl = ag.nivel || 0;
+    const numSeleccionados = pusDisponibles.filter(cid => seleccionados.has(cid)).length;
+    const totalDisponibles = pusDisponibles.length;
+    const btn = h('button', {
+      class: 'btn sm ' + (numSeleccionados === totalDisponibles && totalDisponibles > 0 ? '' : 'primary'),
+      style: { fontSize: '11px', whiteSpace: 'nowrap' },
+      disabled: totalDisponibles === 0
+    },
+      numSeleccionados === 0 ? `+ Partida (${totalDisponibles})`
+      : numSeleccionados === totalDisponibles ? `✕ Quitar partida`
+      : `+ Resto (${totalDisponibles - numSeleccionados})`
+    );
+    btn.addEventListener('click', () => {
+      if (numSeleccionados === totalDisponibles && totalDisponibles > 0) {
+        // Quitar todos
+        for (const cid of pusDisponibles) seleccionados.delete(cid);
+      } else {
+        // Agregar los que falten, cada uno con su cantidad de catálogo
+        for (const cid of pusDisponibles) {
+          if (!seleccionados.has(cid)) {
+            const pu = conceptos[cid];
+            seleccionados.set(cid, { cantidad: Number(pu?.cantidad) || 0 });
+          }
+        }
+      }
+      render();
+    });
+
+    return h('div', {
+      style: {
+        padding: '8px 10px 8px ' + (10 + lvl * 14) + 'px',
+        background: lvl === 0 ? 'rgba(106, 169, 255, 0.07)' : 'rgba(108, 115, 132, 0.05)',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex', alignItems: 'center', gap: '10px'
+      }
+    }, [
+      h('div', { style: { flex: 1, minWidth: 0 } }, [
+        h('div', { style: { fontSize: '11px', color: 'var(--accent)', fontFamily: 'var(--mono)', fontWeight: '600' } }, ag.clave || ''),
+        h('div', { style: { fontSize: '12px', fontWeight: '600', color: 'var(--text-0)' } }, ag.descripcion || '—')
+      ]),
+      h('div', { class: 'muted', style: { fontSize: '11px', whiteSpace: 'nowrap' } },
+        totalDisponibles + ' concepto' + (totalDisponibles === 1 ? '' : 's')),
+      btn
+    ]);
+  }
+
+  function filaPU(pu, yaIncluido) {
+    const lvl = pu.nivel || 0;
+    const sel = seleccionados.get(pu.cid);
+    const checked = !!sel;
+    const cb = h('input', { type: 'checkbox', checked, disabled: yaIncluido });
+    const cantInput = h('input', {
+      type: 'number', step: '0.01', min: '0',
+      value: sel ? String(sel.cantidad) : String(Number(pu.cantidad) || 0),
+      style: { width: '80px', textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '12px' },
+      disabled: !checked
+    });
+    cb.addEventListener('change', () => {
+      if (cb.checked) {
+        seleccionados.set(pu.cid, { cantidad: Number(cantInput.value) || Number(pu.cantidad) || 0 });
+        cantInput.disabled = false;
+        if (Number(cantInput.value) === 0) cantInput.value = String(Number(pu.cantidad) || 0);
+      } else {
+        seleccionados.delete(pu.cid);
+        cantInput.disabled = true;
+      }
+      actualizarContador();
+    });
+    cantInput.addEventListener('input', () => {
+      const v = Number(cantInput.value);
+      if (seleccionados.has(pu.cid)) {
+        seleccionados.set(pu.cid, { cantidad: v });
+        actualizarContador();
+      }
+    });
+
+    const opusCant = Number(pu.cantidad) || 0;
+    const opusPU = Number(pu.precioUnitario) || 0;
+    const opusTotal = opusCant * opusPU;
+
+    return h('div', {
+      style: {
+        padding: '6px 10px 6px ' + (10 + lvl * 14) + 'px',
+        borderBottom: '1px solid var(--border)',
+        display: 'grid',
+        gridTemplateColumns: '24px 70px 1fr 60px 110px 90px 110px',
+        gap: '8px', alignItems: 'center',
+        opacity: yaIncluido ? 0.4 : 1
+      },
+      onClick: (e) => {
+        // Click en cualquier parte (excepto en los inputs) alterna selección
+        if (yaIncluido) return;
+        if (e.target.tagName === 'INPUT') return;
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change'));
+      }
+    }, [
+      cb,
+      h('div', { class: 'mono', style: { fontSize: '11px', color: 'var(--text-2)' } }, pu.clave || pu.cid.slice(0, 10)),
+      h('div', { style: { fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: pu.descripcion },
+        (pu.descripcion || '').slice(0, 80) +
+        (yaIncluido ? ' · ya en alcance' : '')),
+      h('div', { class: 'muted', style: { fontSize: '11px', fontFamily: 'var(--mono)' } }, pu.unidad || ''),
+      h('div', { class: 'muted', style: { fontSize: '11px', textAlign: 'right', fontFamily: 'var(--mono)' } },
+        'Cat: ' + (opusCant ? opusCant.toLocaleString('es-MX', { maximumFractionDigits: 2 }) : '—')),
+      cantInput,
+      h('div', { class: 'muted', style: { fontSize: '11px', textAlign: 'right', fontFamily: 'var(--mono)' } },
+        opusTotal ? '$' + opusTotal.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—')
+    ]);
+  }
+
+  // Header con columnas del listado (alineado con grid de filaPU)
+  const headerCols = h('div', {
+    style: {
+      padding: '6px 10px',
+      background: 'var(--bg-3)',
+      borderBottom: '1px solid var(--border-strong)',
+      display: 'grid',
+      gridTemplateColumns: '24px 70px 1fr 60px 110px 90px 110px',
+      gap: '8px',
+      fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px', color: 'var(--text-1)',
+      fontWeight: '600'
+    }
+  }, [
+    h('div', {}, ''),
+    h('div', {}, 'Clave'),
+    h('div', {}, 'Descripción'),
+    h('div', {}, 'Unidad'),
+    h('div', { style: { textAlign: 'right' } }, 'Cant. catálogo'),
+    h('div', { style: { textAlign: 'right' } }, 'Cant. a contratar'),
+    h('div', { style: { textAlign: 'right' } }, 'Importe ref.')
+  ]);
+  lista.appendChild(headerCols);
+
+  const confirmarBtn = h('button', { class: 'btn primary', disabled: true }, 'Agregar 0 conceptos');
+  confirmarBtn.addEventListener('click', async () => {
+    if (seleccionados.size === 0) return;
+    const items = Array.from(seleccionados.entries()).map(([cid, sel]) => ({
+      conceptoId: cid,
+      cantidad: Number(sel.cantidad) || 0,
+      notas: ''
+    }));
+    // Permitimos cantidad 0 (a veces se cotiza pero no se sabe cantidad final)
+    confirmarBtn.disabled = true;
+    confirmarBtn.textContent = 'Guardando...';
+    try {
+      await addSubcontratoConceptosBulk(obraId, scId, items);
+      toast(`${items.length} concepto${items.length === 1 ? '' : 's'} agregado${items.length === 1 ? '' : 's'} al alcance`, 'ok');
+      // Cerrar modal manualmente y refrescar (modal usa promise + onConfirm)
+      document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+      navigate(`/obras/${obraId}/subcontratos/${scId}?tab=alcance`);
+    } catch (err) {
+      toast('Error: ' + err.message, 'danger');
+      confirmarBtn.disabled = false;
     }
   });
+
+  render();
+
+  // Modal custom: el modal helper no soporta footer custom complejo, así que
+  // armamos uno propio con backdrop.
+  const root = document.getElementById('modal-root');
+  const card = h('div', { class: 'modal full' }, [
+    h('h2', {}, 'Agregar conceptos al alcance'),
+    h('div', { class: 'row', style: { gap: '10px', marginBottom: '10px' } }, [
+      h('div', { style: { flex: 1 } }, search),
+      h('label', { class: 'row', style: { gap: '6px', cursor: 'pointer', fontSize: '13px' } }, [
+        soloPendCb, h('span', {}, 'Ocultar los que ya están en el alcance')
+      ])
+    ]),
+    h('div', { class: 'muted', style: { fontSize: '11px', marginBottom: '6px' } },
+      'Tip: usa "+ Partida (N)" para agregar todos los conceptos de un agrupador con sus cantidades del catálogo, o marca individualmente. La cantidad se pre-carga con la del catálogo OPUS — edítala si vas a subcontratar más o menos.'),
+    lista,
+    h('div', { class: 'actions', style: { justifyContent: 'space-between' } }, [
+      contadorEl,
+      h('div', { class: 'row' }, [
+        h('button', { class: 'btn ghost', onClick: () => { backdrop.remove(); } }, 'Cancelar'),
+        confirmarBtn
+      ])
+    ])
+  ]);
+  const backdrop = h('div', {
+    class: 'modal-backdrop',
+    onClick: (e) => { if (e.target === e.currentTarget) backdrop.remove(); }
+  }, card);
+  root.appendChild(backdrop);
 }
 
 async function onEditarConcepto(obraId, scId, cid, c, conceptos) {
