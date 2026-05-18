@@ -5,7 +5,7 @@ import {
   getObraMetaLegacy, listBuzon, filtrarBuzon,
   listCotizaciones, listOC,
   loadCatalogoConceptos, loadCatalogoMateriales,
-  listProveedoresObra
+  listProveedoresObra, listSubcontratos
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { num0, money } from '../util/format.js';
@@ -15,14 +15,15 @@ export async function renderObra({ params }) {
   setState({ obraActual: obraId });
   renderShell(crumbs(obraId, '...'), h('div', { class: 'empty' }, 'Cargando obra…'));
 
-  const [meta, buzon, cotizaciones, ocs, catCon, catMat, provObra] = await Promise.all([
+  const [meta, buzon, cotizaciones, ocs, catCon, catMat, provObra, subcontratos] = await Promise.all([
     getObraMetaLegacy(obraId),
     listBuzon(),
     listCotizaciones(obraId),
     listOC(obraId),
     loadCatalogoConceptos(obraId),
     loadCatalogoMateriales(obraId),
-    listProveedoresObra(obraId)
+    listProveedoresObra(obraId),
+    listSubcontratos(obraId)
   ]);
 
   if (!meta) {
@@ -64,6 +65,8 @@ export async function renderObra({ params }) {
 
   const numProvs = (provObra?.items || []).length;
   const numMaterialesCatalogo = catMat?.items ? Object.keys(catMat.items).length : 0;
+  const numSubcontratos = Object.keys(subcontratos).length;
+  const numSubAdjudicados = Object.values(subcontratos).filter(sc => sc.meta?.estado === 'adjudicado').length;
   const tilesCard = h('div', { class: 'grid-3', style: { marginTop: '14px' } }, [
     tileCard('Inbox de requisiciones',
       Object.keys(reqsPendientes).length, 'pendientes',
@@ -88,7 +91,11 @@ export async function renderObra({ params }) {
     tileCard('Órdenes de compra',
       numOC, `· ${money(totalOC)}`,
       `/obras/${obraId}/oc`,
-      'OC emitidas y enviadas a contabilidad.')
+      'OC emitidas y enviadas a contabilidad.'),
+    tileCard('🔧 Subcontratos',
+      numSubcontratos, `${numSubAdjudicados} adjudicado${numSubAdjudicados === 1 ? '' : 's'}`,
+      `/obras/${obraId}/subcontratos`,
+      'Licitación y adjudicación de subcontratos por conceptos OPUS. Estimaciones los consume para emitir pagos parciales.')
   ]);
 
   const refsCard = h('div', { class: 'card' }, [

@@ -417,6 +417,141 @@ export async function deleteCotizacion(obraId, cotId) {
   return rremove(`obras/${obraId}/cotizaciones/${cotId}`);
 }
 
+// === Subcontratos ===
+//
+// Path: /shared/compras/obras/{obraId}/subcontratos/{scId}
+//
+// Un subcontrato es como una OC pero para conceptos OPUS (no materiales del
+// almacén): cubre mano de obra + materiales + equipo de un alcance específico,
+// y se ejecuta a lo largo del tiempo en estimaciones parciales que las hace
+// la app de estimaciones (lectora del subcontrato adjudicado).
+//
+// Shape:
+//   meta: { nombre, descripcion, estado: 'cotizando'|'adjudicado'|'cerrado',
+//           licitanteAdjudicadoId, adjudicadoAt, createdAt, updatedAt, autor }
+//   conceptos: { [cid]: { conceptoId, cantidad, notas? } }
+//   licitantes: {
+//     [licId]: {
+//       provId,                  // id del proveedor (global o de obra)
+//       nombre, rfc, email, telefono, contacto,
+//       precios: { [conceptoId]: precio_unitario },
+//       notas, fechaCotizacion, archivado,
+//       aceptaSinIva               // heredado del proveedor al agregar
+//     }
+//   }
+//
+// El catálogo de licitantes es la lista de proveedores de obra: para agregar
+// un licitante, el comprador elige un proveedor existente (o crea uno nuevo,
+// que se da de alta como proveedor de obra). Mantenemos snapshot de datos
+// del proveedor en el licitante para no romper si después se borra del
+// catálogo global.
+
+export async function listSubcontratos(obraId) {
+  return (await rread(`obras/${obraId}/subcontratos`)) || {};
+}
+export async function getSubcontrato(obraId, scId) {
+  return await rread(`obras/${obraId}/subcontratos/${scId}`);
+}
+export async function createSubcontrato(obraId, data, autor) {
+  return rpush(`obras/${obraId}/subcontratos`, {
+    meta: {
+      nombre: data.nombre || 'Subcontrato',
+      descripcion: data.descripcion || '',
+      estado: 'cotizando',
+      licitanteAdjudicadoId: null,
+      adjudicadoAt: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      autor: autor || null
+    },
+    conceptos: data.conceptos || {},
+    licitantes: data.licitantes || {}
+  });
+}
+export async function updateSubcontratoMeta(obraId, scId, patch) {
+  return rupdate(`obras/${obraId}/subcontratos/${scId}/meta`,
+    { ...patch, updatedAt: Date.now() });
+}
+export async function deleteSubcontrato(obraId, scId) {
+  return rremove(`obras/${obraId}/subcontratos/${scId}`);
+}
+
+// Conceptos del alcance
+export async function setSubcontratoConceptos(obraId, scId, conceptos) {
+  await rset(`obras/${obraId}/subcontratos/${scId}/conceptos`, conceptos);
+  await updateSubcontratoMeta(obraId, scId, {});  // touch updatedAt
+}
+export async function addSubcontratoConcepto(obraId, scId, data) {
+  const id = 'cn_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+  await rset(`obras/${obraId}/subcontratos/${scId}/conceptos/${id}`, {
+    conceptoId: data.conceptoId,
+    cantidad: Number(data.cantidad) || 0,
+    notas: data.notas || ''
+  });
+  await updateSubcontratoMeta(obraId, scId, {});
+  return id;
+}
+export async function updateSubcontratoConcepto(obraId, scId, cid, patch) {
+  await rupdate(`obras/${obraId}/subcontratos/${scId}/conceptos/${cid}`, patch);
+  await updateSubcontratoMeta(obraId, scId, {});
+}
+export async function removeSubcontratoConcepto(obraId, scId, cid) {
+  await rremove(`obras/${obraId}/subcontratos/${scId}/conceptos/${cid}`);
+  await updateSubcontratoMeta(obraId, scId, {});
+}
+
+// Licitantes (snapshot de proveedor + sus precios para los conceptos del alcance)
+export async function addSubcontratoLicitante(obraId, scId, data) {
+  const r = await rpush(`obras/${obraId}/subcontratos/${scId}/licitantes`, {
+    provId: data.provId || null,
+    nombre: data.nombre || '',
+    rfc: data.rfc || '',
+    email: data.email || '',
+    telefono: data.telefono || '',
+    contacto: data.contacto || '',
+    aceptaSinIva: data.aceptaSinIva !== false,
+    precios: data.precios || {},
+    notas: data.notas || '',
+    fechaCotizacion: data.fechaCotizacion || Date.now(),
+    archivado: false
+  });
+  await updateSubcontratoMeta(obraId, scId, {});
+  return r;
+}
+export async function updateSubcontratoLicitante(obraId, scId, licId, patch) {
+  await rupdate(`obras/${obraId}/subcontratos/${scId}/licitantes/${licId}`, patch);
+  await updateSubcontratoMeta(obraId, scId, {});
+}
+export async function setSubcontratoLicitantePrecio(obraId, scId, licId, conceptoId, precio) {
+  await rset(`obras/${obraId}/subcontratos/${scId}/licitantes/${licId}/precios/${conceptoId}`,
+    Number(precio) || 0);
+  await updateSubcontratoMeta(obraId, scId, {});
+}
+export async function setSubcontratoLicitantePrecios(obraId, scId, licId, precios) {
+  await rset(`obras/${obraId}/subcontratos/${scId}/licitantes/${licId}/precios`, precios || {});
+  await updateSubcontratoMeta(obraId, scId, {});
+}
+export async function removeSubcontratoLicitante(obraId, scId, licId) {
+  await rremove(`obras/${obraId}/subcontratos/${scId}/licitantes/${licId}`);
+  await updateSubcontratoMeta(obraId, scId, {});
+}
+
+// Adjudicación
+export async function adjudicarSubcontrato(obraId, scId, licId) {
+  await updateSubcontratoMeta(obraId, scId, {
+    estado: 'adjudicado',
+    licitanteAdjudicadoId: licId,
+    adjudicadoAt: Date.now()
+  });
+}
+export async function desadjudicarSubcontrato(obraId, scId) {
+  await updateSubcontratoMeta(obraId, scId, {
+    estado: 'cotizando',
+    licitanteAdjudicadoId: null,
+    adjudicadoAt: null
+  });
+}
+
 // === Solicitudes de cotización (presets) ===
 //
 // Path: /shared/compras/obras/{obraId}/solicitudesCotizacion/{solId}

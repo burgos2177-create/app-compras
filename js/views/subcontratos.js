@@ -1,0 +1,165 @@
+import { h, toast, modal } from '../util/dom.js';
+import { renderShell } from './shell.js';
+import { state, setState } from '../state/store.js';
+import {
+  getObraMetaLegacy, listSubcontratos, createSubcontrato,
+  deleteSubcontrato
+} from '../services/db.js';
+import { navigate } from '../state/router.js';
+import { dateMx, num0, money } from '../util/format.js';
+
+// Lista de subcontratos de la obra. Cada subcontrato cubre conceptos OPUS
+// con un alcance (concepto + cantidad), licitantes con sus precios y, al
+// adjudicar, queda como "compromiso" que la app de estimaciones consume
+// para emitir estimaciones parciales hacia bitácora.
+
+export async function renderSubcontratos({ params }) {
+  const obraId = params.id;
+  setState({ obraActual: obraId });
+  renderShell(crumbs(obraId, '...'), h('div', { class: 'empty' }, 'Cargando…'));
+
+  const [meta, scs] = await Promise.all([
+    getObraMetaLegacy(obraId),
+    listSubcontratos(obraId)
+  ]);
+
+  const ids = Object.keys(scs);
+  ids.sort((a, b) => (scs[b].meta?.createdAt || 0) - (scs[a].meta?.createdAt || 0));
+
+  const head = h('div', { class: 'row' }, [
+    h('h1', {}, 'Subcontratos'),
+    h('div', { style: { flex: 1 } }),
+    h('button', { class: 'btn primary', onClick: () => onNuevo(obraId) }, '+ Nuevo subcontrato')
+  ]);
+
+  let body;
+  if (ids.length === 0) {
+    body = h('div', { class: 'empty' }, [
+      h('div', { class: 'ico' }, '🔧'),
+      h('div', {}, 'Sin subcontratos todavía.'),
+      h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '8px' } },
+        'Un subcontrato define un alcance de conceptos OPUS, recibe precios de varios licitantes y se adjudica al ganador. Después la app de estimaciones genera las estimaciones parciales con base en este subcontrato.')
+    ]);
+  } else {
+    body = h('div', { class: 'card', style: { padding: 0, overflow: 'auto' } }, [
+      h('table', { class: 'tbl' }, [
+        h('thead', {}, h('tr', {}, [
+          h('th', {}, 'Nombre'),
+          h('th', {}, 'Estado'),
+          h('th', { class: 'num' }, 'Conceptos'),
+          h('th', { class: 'num' }, 'Licitantes'),
+          h('th', {}, 'Ganador'),
+          h('th', { class: 'num' }, 'Importe adjudicado'),
+          h('th', {}, 'Última edición'),
+          h('th', {}, '')
+        ])),
+        h('tbody', {}, ids.map(id => scRow(obraId, id, scs[id])))
+      ])
+    ]);
+  }
+
+  renderShell(crumbs(obraId, meta?.nombre), h('div', {}, [head, body]));
+}
+
+function scRow(obraId, scId, sc) {
+  const m = sc.meta || {};
+  const conceptos = sc.conceptos || {};
+  const licitantes = sc.licitantes || {};
+  const adjudicado = m.licitanteAdjudicadoId ? licitantes[m.licitanteAdjudicadoId] : null;
+
+  // Importe adjudicado: suma de precio×cantidad del licitante ganador para cada concepto
+  let importeAdj = 0;
+  if (adjudicado) {
+    for (const c of Object.values(conceptos)) {
+      const precio = Number(adjudicado.precios?.[c.conceptoId]) || 0;
+      importeAdj += precio * (Number(c.cantidad) || 0);
+    }
+  }
+
+  return h('tr', {
+    style: { cursor: 'pointer' },
+    onClick: () => navigate(`/obras/${obraId}/subcontratos/${scId}`)
+  }, [
+    h('td', {}, [
+      h('div', { style: { fontWeight: '600' } }, m.nombre || '(sin nombre)'),
+      m.descripcion && h('div', { class: 'muted', style: { fontSize: '11px' } },
+        m.descripcion.slice(0, 80) + (m.descripcion.length > 80 ? '…' : ''))
+    ]),
+    h('td', {}, estadoSCBadge(m.estado)),
+    h('td', { class: 'num' }, num0(Object.keys(conceptos).length)),
+    h('td', { class: 'num' }, num0(Object.keys(licitantes).length)),
+    h('td', { style: { fontSize: '12px' } },
+      adjudicado
+        ? h('b', { style: { color: 'var(--ok)' } }, adjudicado.nombre)
+        : h('span', { class: 'muted' }, '—')),
+    h('td', { class: 'num' }, adjudicado ? money(importeAdj) : '—'),
+    h('td', { class: 'muted', style: { fontSize: '12px' } }, dateMx(m.updatedAt || m.createdAt)),
+    h('td', {},
+      m.estado !== 'adjudicado' && h('button', {
+        class: 'btn sm danger',
+        onClick: (e) => { e.stopPropagation(); onBorrar(obraId, scId, m); }
+      }, '🗑'))
+  ]);
+}
+
+export function estadoSCBadge(estado) {
+  if (estado === 'cotizando')  return h('span', { class: 'tag warn' }, '💬 Cotizando');
+  if (estado === 'adjudicado') return h('span', { class: 'tag ok' }, '🏆 Adjudicado');
+  if (estado === 'cerrado')    return h('span', { class: 'tag muted' }, '🔒 Cerrado');
+  return h('span', { class: 'tag muted' }, estado || '—');
+}
+
+async function onNuevo(obraId) {
+  const nombre = h('input', { autofocus: true, placeholder: 'p.ej. Cimentación · estructura · acabados' });
+  const descripcion = h('textarea', { rows: 2, placeholder: 'Notas, condiciones especiales, etc.' });
+  await modal({
+    title: 'Nuevo subcontrato',
+    body: h('div', {}, [
+      h('div', { class: 'field' }, [h('label', {}, 'Nombre *'), nombre]),
+      h('div', { class: 'field' }, [h('label', {}, 'Descripción'), descripcion]),
+      h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } },
+        'Al crearlo entras al detalle para capturar el alcance (conceptos OPUS + cantidades) y empezar a recibir cotizaciones de licitantes.')
+    ]),
+    confirmLabel: 'Crear',
+    onConfirm: async () => {
+      const n = nombre.value.trim();
+      if (!n) { toast('Captura un nombre', 'danger'); return false; }
+      try {
+        const u = state.user;
+        const id = await createSubcontrato(obraId, {
+          nombre: n,
+          descripcion: descripcion.value.trim()
+        }, { uid: u.uid, displayName: u.displayName || '', email: u.email || '' });
+        toast('Subcontrato creado', 'ok');
+        navigate(`/obras/${obraId}/subcontratos/${id}`);
+        return true;
+      } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+    }
+  });
+}
+
+async function onBorrar(obraId, scId, meta) {
+  await modal({
+    title: 'Borrar subcontrato',
+    body: h('div', {}, [
+      h('p', {}, `¿Borrar "${meta.nombre}"? Esta acción no se puede deshacer.`),
+      h('p', { class: 'muted', style: { fontSize: '12px' } },
+        'Se borra el alcance y todas las cotizaciones de licitantes. Solo se puede borrar mientras no esté adjudicado.')
+    ]),
+    confirmLabel: 'Borrar', danger: true,
+    onConfirm: async () => {
+      await deleteSubcontrato(obraId, scId);
+      toast('Subcontrato borrado', 'ok');
+      renderSubcontratos({ params: { id: obraId } });
+      return true;
+    }
+  });
+}
+
+function crumbs(obraId, nombre) {
+  return [
+    { label: 'Obras', to: '/' },
+    { label: nombre || obraId.slice(0, 6), to: '/obras/' + obraId },
+    { label: 'Subcontratos' }
+  ];
+}
