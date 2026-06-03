@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="App Compras SGR">
+  <defs>
+    <!-- fondo: gradiente sutil (lenguaje SOGRUB) -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b212d"/>
+      <stop offset="1" stop-color="#0d1015"/>
+    </linearGradient>
+    <!-- rejilla blueprint tenue, color de acento de ESTA app (#6aa9ff) al 7% -->
+    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <path d="M64 0H0V64" fill="none" stroke="#6aa9ff" stroke-opacity="0.07" stroke-width="2"/>
+    </pattern>
+    <!-- forma squircle de la app -->
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="1024" height="1024" rx="232" ry="232"/>
+    </clipPath>
+    <linearGradient id="glyph" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8bbfff"/>
+      <stop offset="1" stop-color="#6aa9ff"/>
+    </linearGradient>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#grid)"/>
+    <!-- viñeta sutil -->
+    <rect x="0" y="0" width="1024" height="1024" fill="#0d1015" opacity="0.10"/>
+
+    <!-- ===== glifo: orden de compra (documento) ===== -->
+    <!-- sombra de la hoja para separar del fondo -->
+    <rect x="300" y="232" width="372" height="496" rx="40" fill="#000000" opacity="0.28" transform="translate(10,16)"/>
+
+    <!-- hoja de la orden de compra, color de acento -->
+    <rect x="300" y="232" width="372" height="496" rx="40" fill="url(#glyph)"/>
+
+    <!-- marcas "grabadas" en color de fondo: encabezado + renglones de partidas -->
+    <g fill="#0d1015">
+      <!-- bloque de encabezado (logo/folio) -->
+      <rect x="348" y="296" width="132" height="36" rx="18"/>
+      <rect x="348" y="352" width="276" height="20" rx="10" opacity="0.85"/>
+      <!-- renglones de partidas -->
+      <rect x="348" y="430" width="276" height="18" rx="9" opacity="0.9"/>
+      <rect x="348" y="478" width="276" height="18" rx="9" opacity="0.9"/>
+      <rect x="348" y="526" width="200" height="18" rx="9" opacity="0.9"/>
+      <!-- línea de total (más marcada) -->
+      <rect x="348" y="600" width="160" height="28" rx="14"/>
+    </g>
+
+    <!-- ===== sello de verificación (orden aprobada) ===== -->
+    <!-- anillo de fondo para recortar el sello del documento -->
+    <circle cx="690" cy="690" r="150" fill="#0d1015"/>
+    <circle cx="690" cy="690" r="120" fill="url(#glyph)"/>
+    <!-- check grabado en color de fondo -->
+    <path d="M632 690 l40 42 78 -92" fill="none" stroke="#0d1015" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
