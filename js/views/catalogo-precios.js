@@ -12,7 +12,7 @@ import {
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num, num0, money } from '../util/format.js';
-import { exportCatalogoComparativaPdf } from '../services/subcontrato-export.js';
+import { exportCatalogoComparativaPdf, exportCatalogoComparativaXlsx } from '../services/subcontrato-export.js';
 
 // Catálogo de precios pre-cotización. Tabla materiales × proveedores donde
 // el comprador captura proactivamente precios. Sirve para tener una base
@@ -241,14 +241,13 @@ export async function renderCatalogoPrecios({ params, query }) {
     renderBody();
   });
 
-  // Botón "PDF comparativa": exporta la vista actual (materiales × proveedores
-  // visibles) a un PDF de comparación de precios.
-  const pdfBtn = h('button', { class: 'btn ghost' }, '📄 PDF comparativa');
-  pdfBtn.addEventListener('click', () => {
+  // Construye el payload de comparativa a partir de la vista actual (materiales
+  // × proveedores visibles). Devuelve null y avisa si no hay nada que exportar.
+  function buildComparativaPayload() {
     const { provsParaFila, hayProvConIvaVisible, visibles, detalleFiltros } = computeView();
-    if (visibles.length === 0) { toast('No hay materiales en la vista actual', 'danger'); return; }
-    if (provsParaFila.length === 0) { toast('No hay proveedores visibles', 'danger'); return; }
-    if (dirty.size > 0) toast('El PDF usa los valores en pantalla (incluye cambios sin guardar)', 'warn');
+    if (visibles.length === 0) { toast('No hay materiales en la vista actual', 'danger'); return null; }
+    if (provsParaFila.length === 0) { toast('No hay proveedores visibles', 'danger'); return null; }
+    if (dirty.size > 0) toast('El export usa los valores en pantalla (incluye cambios sin guardar)', 'warn');
     const cap = 1000;
     const rows = visibles.slice(0, cap).map(mk => {
       const mm = materiales[mk];
@@ -264,13 +263,27 @@ export async function renderCatalogoPrecios({ params, query }) {
         })
       };
     });
-    exportCatalogoComparativaPdf({ meta }, {
+    return {
       provs: provsParaFila.map(p => ({ nombre: p.nombre, aceptaSinIva: !!p.aceptaSinIva })),
       rows,
       hayProvConIva: hayProvConIvaVisible,
       iva: IVA_PCT,
       filtrosDesc: detalleFiltros.join(', ')
-    });
+    };
+  }
+
+  // Exporta la vista actual a comparativa de precios (PDF para presentar, XLSX
+  // para análisis offline). Compara MATERIALES — no conceptos de subcontrato.
+  const pdfBtn = h('button', { class: 'btn ghost' }, '📄 PDF comparativa');
+  pdfBtn.addEventListener('click', () => {
+    const payload = buildComparativaPayload();
+    if (payload) exportCatalogoComparativaPdf({ meta }, payload);
+  });
+
+  const xlsxBtn = h('button', { class: 'btn ghost' }, '⬇ XLSX comparativa');
+  xlsxBtn.addEventListener('click', () => {
+    const payload = buildComparativaPayload();
+    if (payload) exportCatalogoComparativaXlsx({ meta }, payload);
   });
 
   const filtros = h('div', { style: { marginBottom: '12px' } }, [
@@ -288,6 +301,7 @@ export async function renderCatalogoPrecios({ params, query }) {
       h('div', { style: { flex: 1 } }),
       colsBtn,
       pdfBtn,
+      xlsxBtn,
       solicitarBtn,
       h('button', { class: 'btn ghost', onClick: () => navigate(`/obras/${obraId}/proveedores`) }, '🏷️ Gestionar proveedores')
     ])
