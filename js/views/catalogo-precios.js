@@ -208,9 +208,10 @@ export async function renderCatalogoPrecios({ params, query }) {
     navigate(`/obras/${obraId}/solicitar-cotizacion?materiales=${q}`);
   });
 
-  // Botón "Columnas": ocultar proveedores que no aplican a esta vista.
+  // Botón "Proveedores activos": deja activos solo los proveedores que van al
+  // caso. Los inactivos se ocultan de la tabla, los filtros y la comparativa.
   const colsBtnLabel = () =>
-    `🔲 Columnas (${provsConDatos.length - hiddenProvs.size}/${provsConDatos.length})`;
+    `👥 Proveedores activos (${provsConDatos.length - hiddenProvs.size}/${provsConDatos.length})`;
   const colsBtn = h('button', { class: 'btn ghost' }, colsBtnLabel());
   colsBtn.addEventListener('click', async () => {
     const checks = provsConDatos.map(p => {
@@ -225,14 +226,14 @@ export async function renderCatalogoPrecios({ params, query }) {
     });
     const body = h('div', {}, [
       h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } },
-        'Desmarca los proveedores que no apliquen a esta vista. Se ocultan de la tabla, los filtros y el PDF comparativo.'),
+        'Deja activos solo los proveedores que entran a la comparación. Los inactivos se ocultan de la tabla, los filtros y la comparativa.'),
       h('div', { class: 'row', style: { gap: '8px', marginBottom: '8px' } }, [
         h('button', { class: 'btn sm ghost', type: 'button', onClick: () => checks.forEach(c => { c.cb.checked = true; }) }, 'Todos'),
         h('button', { class: 'btn sm ghost', type: 'button', onClick: () => checks.forEach(c => { c.cb.checked = false; }) }, 'Ninguno')
       ]),
       ...checks.map(c => c.el)
     ]);
-    const ok = await modal({ title: 'Proveedores visibles', body, confirmLabel: 'Aplicar' });
+    const ok = await modal({ title: 'Proveedores activos', body, confirmLabel: 'Aplicar' });
     if (!ok) return;
     hiddenProvs.clear();
     checks.forEach(c => { if (!c.cb.checked) hiddenProvs.add(c.pid); });
@@ -241,13 +242,15 @@ export async function renderCatalogoPrecios({ params, query }) {
     renderBody();
   });
 
-  // Construye el payload de comparativa a partir de la vista actual (materiales
-  // × proveedores visibles). Devuelve null y avisa si no hay nada que exportar.
+  // Construye el payload de la comparativa: los materiales visibles (los de la
+  // solicitud cuando hay una seleccionada) × los proveedores activos, con las
+  // cantidades estimadas de la solicitud. Devuelve null y avisa si no hay datos.
   function buildComparativaPayload() {
-    const { provsParaFila, hayProvConIvaVisible, visibles, detalleFiltros } = computeView();
+    const { provsParaFila, hayProvConIvaVisible, solicitudActiva, visibles, detalleFiltros } = computeView();
     if (visibles.length === 0) { toast('No hay materiales en la vista actual', 'danger'); return null; }
-    if (provsParaFila.length === 0) { toast('No hay proveedores visibles', 'danger'); return null; }
-    if (dirty.size > 0) toast('El export usa los valores en pantalla (incluye cambios sin guardar)', 'warn');
+    if (provsParaFila.length === 0) { toast('No hay proveedores activos', 'danger'); return null; }
+    if (dirty.size > 0) toast('La comparativa usa los valores en pantalla (incluye cambios sin guardar)', 'warn');
+    const items = solicitudActiva?.items || {};
     const cap = 1000;
     const rows = visibles.slice(0, cap).map(mk => {
       const mm = materiales[mk];
@@ -257,6 +260,7 @@ export async function renderCatalogoPrecios({ params, query }) {
         unidad: mm.unidad || '',
         familia: mm.familia || '',
         opus: Number(mm.costoUnitario) || 0,
+        cantidad: Number(items[mk]?.cantidad) || 0,
         precios: provsParaFila.map(p => {
           const eff = getEffectivePrecio(provIdOf(p), mk);
           return { valor: Number(eff.precio) || 0, disponible: eff.disponible !== false };
@@ -268,23 +272,17 @@ export async function renderCatalogoPrecios({ params, query }) {
       rows,
       hayProvConIva: hayProvConIvaVisible,
       iva: IVA_PCT,
+      solicitudNombre: solicitudActiva?.nombre || '',
       filtrosDesc: detalleFiltros.join(', ')
     };
   }
 
-  // Exporta la vista actual a comparativa de precios (PDF para presentar, XLSX
-  // para análisis offline). Compara MATERIALES — no conceptos de subcontrato.
-  const pdfBtn = h('button', { class: 'btn ghost' }, '📄 PDF comparativa');
-  pdfBtn.addEventListener('click', () => {
+  function exportarComparativa(kind) {
     const payload = buildComparativaPayload();
-    if (payload) exportCatalogoComparativaPdf({ meta }, payload);
-  });
-
-  const xlsxBtn = h('button', { class: 'btn ghost' }, '⬇ XLSX comparativa');
-  xlsxBtn.addEventListener('click', () => {
-    const payload = buildComparativaPayload();
-    if (payload) exportCatalogoComparativaXlsx({ meta }, payload);
-  });
+    if (!payload) return;
+    if (kind === 'pdf') exportCatalogoComparativaPdf({ meta }, payload);
+    else exportCatalogoComparativaXlsx({ meta }, payload);
+  }
 
   const filtros = h('div', { style: { marginBottom: '12px' } }, [
     h('div', { class: 'row', style: { gap: '10px' } }, [
@@ -300,8 +298,6 @@ export async function renderCatalogoPrecios({ params, query }) {
       ]),
       h('div', { style: { flex: 1 } }),
       colsBtn,
-      pdfBtn,
-      xlsxBtn,
       solicitarBtn,
       h('button', { class: 'btn ghost', onClick: () => navigate(`/obras/${obraId}/proveedores`) }, '🏷️ Gestionar proveedores')
     ])
@@ -442,11 +438,22 @@ export async function renderCatalogoPrecios({ params, query }) {
           'Mostrando solo los ',
           h('b', {}, num0(totalItems)),
           ` materiales de la solicitud "${solicitudActiva.nombre || 'sin nombre'}"`,
+          ` · comparando ${num0(provsParaFila.length)} proveedor${provsParaFila.length === 1 ? '' : 'es'} activo${provsParaFila.length === 1 ? '' : 's'}`,
           matsNoEnCatalogo > 0
             ? h('span', { class: 'muted' },
               ` · ${num0(matsNoEnCatalogo)} no aparecen porque ya no están en el catálogo`)
             : null
         ]),
+        h('button', {
+          class: 'btn sm primary',
+          title: 'Comparativa ejecutiva en PDF: ranking de proveedores y total estimado para esta solicitud',
+          onClick: () => exportarComparativa('pdf')
+        }, '📄 PDF ejecutiva'),
+        h('button', {
+          class: 'btn sm ghost',
+          title: 'Comparativa en hoja de cálculo (XLSX) de los materiales de esta solicitud',
+          onClick: () => exportarComparativa('xlsx')
+        }, '⬇ XLSX'),
         h('a', {
           href: `#/obras/${obraId}/solicitar-cotizacion?solicitud=${solicitudFiltro}`,
           style: { fontSize: '12px' }

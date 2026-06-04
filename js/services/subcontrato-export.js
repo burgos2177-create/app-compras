@@ -8,9 +8,9 @@
 //   4. exportComparativaXlsx / exportComparativaPdf — comparativa lista
 //      para revisión offline o presentar a dirección.
 //   5/6. exportCatalogoComparativaPdf / exportCatalogoComparativaXlsx —
-//      comparativa de precios pre-cotización (materiales × proveedores) tal
-//      como se ve en la vista de catálogo, respetando filtros y columnas
-//      ocultas. Compara MATERIALES, no conceptos de subcontrato.
+//      comparativa EJECUTIVA de los materiales de una solicitud × los
+//      proveedores activos, con ranking y total por proveedor (usando las
+//      cantidades de la solicitud). Compara MATERIALES, no conceptos.
 //
 // El XLSX para licitante incluye una fila "marca" con metadata para que al
 // importarse se reconozca como template de subcontrato de compras.
@@ -576,171 +576,43 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
   doc.save(`Comparativa_${safeName(m.nombre)}_${safeName(meta.nombre)}.pdf`);
 }
 
-// 6) ===== Comparativa de catálogo de precios (pre-cotización) PDF =====
+// ===== Cálculos compartidos de comparativa de catálogo (materiales) =====
 //
-// A diferencia de la comparativa de subcontrato (que usa el alcance de un
-// subcontrato con cantidades), esta toma la vista de catálogo: materiales del
-// catálogo × proveedores asignados, con su precio capturado. Como no hay
-// cantidades, la comparación es por precio unitario normalizado a "sin IVA"
-// (los proveedores que solo facturan se comparan dividiendo entre 1+IVA).
+// Compara MATERIALES (no conceptos de subcontrato): los materiales de una
+// solicitud de cotización × los proveedores activos, con el precio capturado
+// en el catálogo. Si la solicitud trae cantidades estimadas, calcula el total
+// por proveedor (Σ cantidad × P.U.) y un ranking; si no, compara por precio
+// unitario normalizado a "sin IVA" (los que solo facturan se dividen entre 1+IVA).
 //
 // payload: {
-//   provs:        [{ nombre, aceptaSinIva }]   columnas en orden de despliegue
-//   rows:         [{ clave, descripcion, unidad, familia, opus,
-//                    precios: [{ valor, disponible }] }]  (paralelo a provs)
-//   hayProvConIva: bool  (muestra columna "OPUS +IVA")
-//   iva:          0.16
-//   filtrosDesc:  string descriptivo de los filtros activos
+//   provs:           [{ nombre, aceptaSinIva }]   columnas en orden de despliegue
+//   rows:            [{ clave, descripcion, unidad, familia, opus, cantidad,
+//                       precios: [{ valor, disponible }] }]  (paralelo a provs)
+//   hayProvConIva:   bool   (muestra columna "OPUS +IVA")
+//   iva:             0.16
+//   solicitudNombre: string (título del documento)
+//   filtrosDesc:     string descriptivo de los filtros activos
 // }
-export function exportCatalogoComparativaPdf(obra, payload) {
-  const m = obra?.meta || {};
-  const { provs = [], rows = [], hayProvConIva = false, iva = 0.16, filtrosDesc = '' } = payload || {};
-
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
-  let y = drawHeader(doc, obra, 'COMPARATIVA DE PRECIOS');
-
-  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(70);
-  doc.text(`${rows.length} materiales · ${provs.length} proveedores${filtrosDesc ? ' · ' + filtrosDesc : ''}`, 30, y);
-
-  // Normaliza a precio comparable sin IVA.
+function analizarComparativaCatalogo(payload) {
+  const { provs = [], rows = [], iva = 0.16 } = payload || {};
   const norm = (val, aceptaSinIva) => (aceptaSinIva ? val : val / (1 + iva));
+  const hasCant = rows.some(r => Number(r.cantidad) > 0);
 
-  // Acumuladores de análisis por proveedor.
   const cotizados = provs.map(() => 0);
   const mejores = provs.map(() => 0);
   const ahorroAcum = provs.map(() => 0);
   const ahorroN = provs.map(() => 0);
+  const totalProv = provs.map(() => 0);          // Σ cantidad × P.U.
+  const bestCells = new Set();                    // `${rowIdx}:${provIdx}` celda ganadora
+  const bestProvByRow = [];                        // índice de proveedor ganador por renglón
+  let opusTotal = 0;
 
-  const head = ['Clave', 'Descripción', 'U.', 'OPUS s/IVA'];
-  if (hayProvConIva) head.push('OPUS +IVA');
-  for (const p of provs) head.push((p.nombre || '') + (p.aceptaSinIva ? ' (s/IVA)' : ' (+IVA)'));
-  const baseCols = hayProvConIva ? 5 : 4;
-
-  const body = [];
-  const bestCells = new Set();   // `${rowIdx}:${provIdx}` de la celda más barata
   rows.forEach((r, ri) => {
     const opus = Number(r.opus) || 0;
     const opusIva = opus * (1 + iva);
+    const cant = Number(r.cantidad) || 0;
+    opusTotal += cant * opus;
 
-    let best = Infinity;
-    provs.forEach((p, pi) => {
-      const cell = r.precios[pi];
-      const v = Number(cell?.valor) || 0;
-      if (!cell || cell.disponible === false || v <= 0) return;
-      const nn = norm(v, p.aceptaSinIva);
-      if (nn < best) best = nn;
-    });
-
-    const line = [r.clave || '', r.descripcion || '', r.unidad || '', opus > 0 ? money(opus) : '—'];
-    if (hayProvConIva) line.push(opus > 0 ? money(opusIva) : '—');
-
-    provs.forEach((p, pi) => {
-      const cell = r.precios[pi];
-      const v = Number(cell?.valor) || 0;
-      if (!cell || v <= 0) {
-        line.push(cell && cell.disponible === false ? 'no maneja' : '—');
-        return;
-      }
-      cotizados[pi]++;
-      const nn = norm(v, p.aceptaSinIva);
-      const ref = p.aceptaSinIva ? opus : opusIva;
-      if (ref > 0) { ahorroAcum[pi] += (ref - v) / ref; ahorroN[pi]++; }
-      if (best < Infinity && Math.abs(nn - best) < 0.005) { mejores[pi]++; bestCells.add(`${ri}:${pi}`); }
-      line.push(money(v));
-    });
-    body.push(line);
-  });
-
-  const columnStyles = {
-    0: { cellWidth: 54, font: 'courier' },
-    1: { cellWidth: 150 },
-    2: { cellWidth: 26, halign: 'center' },
-    3: { halign: 'right', cellWidth: 52, textColor: [120, 120, 120] }
-  };
-  if (hayProvConIva) columnStyles[4] = { halign: 'right', cellWidth: 52, textColor: [120, 120, 120] };
-  for (let i = 0; i < provs.length; i++) columnStyles[baseCols + i] = { halign: 'right' };
-
-  doc.autoTable({
-    startY: y + 12,
-    head: [head],
-    body,
-    styles: { font: 'helvetica', fontSize: 7, cellPadding: 3, lineColor: [200, 210, 220], lineWidth: 0.3 },
-    headStyles: { fillColor: [40, 50, 65], textColor: 230, fontStyle: 'bold', halign: 'center' },
-    columnStyles,
-    margin: { left: 20, right: 20, bottom: 60 },
-    didParseCell: (data) => {
-      if (data.section !== 'body' || data.column.index < baseCols) return;
-      const pi = data.column.index - baseCols;
-      if (bestCells.has(`${data.row.index}:${pi}`)) {
-        data.cell.styles.textColor = [20, 120, 70];
-        data.cell.styles.fontStyle = 'bold';
-      }
-    },
-    didDrawPage: (data) => drawFooter(doc, data)
-  });
-
-  // Análisis por proveedor
-  let yy = doc.lastAutoTable.finalY + 20;
-  if (yy > 500) { doc.addPage(); yy = 100; }
-  doc.setFont('helvetica', 'bold').setFontSize(11).setTextColor(40);
-  doc.text('ANÁLISIS', 30, yy);
-  doc.autoTable({
-    startY: yy + 8,
-    head: [['Proveedor', 'Régimen', 'Cotizados', '# Mejor precio', 'Ahorro prom. vs OPUS']],
-    body: provs.map((p, i) => [
-      p.nombre || '',
-      p.aceptaSinIva ? 'Acepta sin IVA' : 'Solo factura (+IVA)',
-      `${cotizados[i]} / ${rows.length}`,
-      String(mejores[i]),
-      ahorroN[i] > 0 ? fmtPct(ahorroAcum[i] / ahorroN[i]) : '—'
-    ]),
-    styles: { font: 'helvetica', fontSize: 8, cellPadding: 4 },
-    headStyles: { fillColor: [40, 50, 65], textColor: 230, fontStyle: 'bold' },
-    margin: { left: 30, right: 30, bottom: 60 },
-    didDrawPage: (data) => drawFooter(doc, data)
-  });
-
-  doc.save(`Comparativa_precios_${safeName(m.nombre)}.pdf`);
-}
-
-// 7) ===== Comparativa de catálogo de precios (pre-cotización) XLSX =====
-//
-// Misma vista que el PDF (función 6) pero en hoja de cálculo para análisis
-// offline: una columna de P.U. por proveedor, columna de mejor precio y
-// proveedor ganador por renglón, y un bloque de análisis al final.
-// Mismo `payload` que exportCatalogoComparativaPdf.
-export function exportCatalogoComparativaXlsx(obra, payload) {
-  const m = obra?.meta || {};
-  const { provs = [], rows = [], hayProvConIva = false, iva = 0.16, filtrosDesc = '' } = payload || {};
-
-  const norm = (val, aceptaSinIva) => (aceptaSinIva ? val : val / (1 + iva));
-
-  const header = ['Clave', 'Descripción', 'Unidad', 'Familia', 'OPUS s/IVA'];
-  if (hayProvConIva) header.push('OPUS +IVA');
-  for (const p of provs) header.push(`${p.nombre || ''}${p.aceptaSinIva ? ' (s/IVA)' : ' (+IVA)'}`);
-  header.push('Mejor $ (s/IVA)', 'Mejor proveedor');
-
-  const aoa = [
-    ['COMPARATIVA DE PRECIOS — CATÁLOGO'],
-    ['OBRA:', m.nombre || '', '', 'FECHA:', dateStr(Date.now())],
-    [`${rows.length} materiales · ${provs.length} proveedores${filtrosDesc ? ' · ' + filtrosDesc : ''}`],
-    [],
-    header
-  ];
-  const headerRow = aoa.length - 1;
-  const startData = aoa.length;
-
-  const cotizados = provs.map(() => 0);
-  const mejores = provs.map(() => 0);
-  const ahorroAcum = provs.map(() => 0);
-  const ahorroN = provs.map(() => 0);
-
-  for (const r of rows) {
-    const opus = Number(r.opus) || 0;
-    const opusIva = opus * (1 + iva);
-
-    // Mejor precio normalizado y proveedor ganador del renglón.
     let best = Infinity, bestIdx = -1;
     provs.forEach((p, pi) => {
       const cell = r.precios[pi];
@@ -749,60 +621,274 @@ export function exportCatalogoComparativaXlsx(obra, payload) {
       const nn = norm(v, p.aceptaSinIva);
       if (nn < best) { best = nn; bestIdx = pi; }
     });
-
-    const line = [r.clave || '', r.descripcion || '', r.unidad || '', r.familia || '', opus > 0 ? opus : ''];
-    if (hayProvConIva) line.push(opus > 0 ? opusIva : '');
+    bestProvByRow.push(bestIdx);
 
     provs.forEach((p, pi) => {
       const cell = r.precios[pi];
       const v = Number(cell?.valor) || 0;
-      if (!cell || v <= 0) { line.push(cell && cell.disponible === false ? 'no maneja' : ''); return; }
+      if (!cell || cell.disponible === false || v <= 0) return;
       cotizados[pi]++;
+      totalProv[pi] += cant * v;
       const ref = p.aceptaSinIva ? opus : opusIva;
       if (ref > 0) { ahorroAcum[pi] += (ref - v) / ref; ahorroN[pi]++; }
-      if (pi === bestIdx) mejores[pi]++;
-      line.push(v);
+      const nn = norm(v, p.aceptaSinIva);
+      if (best < Infinity && Math.abs(nn - best) < 0.005) { mejores[pi]++; bestCells.add(`${ri}:${pi}`); }
     });
+  });
 
-    line.push(best < Infinity ? best : '');
-    line.push(bestIdx >= 0 ? (provs[bestIdx].nombre || '') : '');
-    aoa.push(line);
+  // Orden de despliegue del ranking: completos por total ascendente; el resto
+  // detrás por # de mejores precios.
+  const full = provs.map((_, i) => cotizados[i] === rows.length && rows.length > 0);
+  const order = provs.map((_, i) => i).sort((a, b) => {
+    if (hasCant && full[a] !== full[b]) return full[a] ? -1 : 1;
+    if (hasCant && full[a] && full[b]) return totalProv[a] - totalProv[b];
+    return mejores[b] - mejores[a];
+  });
+  const winnerIdx = order.length ? order[0] : -1;
+
+  return { norm, hasCant, cotizados, mejores, ahorroAcum, ahorroN, totalProv,
+    opusTotal, bestCells, bestProvByRow, full, order, winnerIdx };
+}
+
+// 6) ===== Comparativa ejecutiva de catálogo (materiales) — PDF =====
+export function exportCatalogoComparativaPdf(obra, payload) {
+  const m = obra?.meta || {};
+  const { provs = [], rows = [], hayProvConIva = false, iva = 0.16,
+    solicitudNombre = '', filtrosDesc = '' } = payload || {};
+  const a = analizarComparativaCatalogo(payload);
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+  let y = drawHeader(doc, obra, 'COMPARATIVA EJECUTIVA');
+
+  doc.setFont('helvetica', 'bold').setFontSize(12).setTextColor(30);
+  doc.text(solicitudNombre || 'Comparativa de precios', 30, y);
+  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(90);
+  doc.text(`${rows.length} materiales · ${provs.length} proveedores${filtrosDesc ? ' · ' + filtrosDesc : ''}`, 30, y + 15);
+  y += 30;
+
+  // ===== Resumen ejecutivo (ranking) =====
+  doc.setFont('helvetica', 'bold').setFontSize(11).setTextColor(40);
+  doc.text('RESUMEN EJECUTIVO', 30, y);
+
+  const sumHead = ['#', 'Proveedor', 'Régimen', 'Cotizados'];
+  if (a.hasCant) sumHead.push('Total estimado', 'Ahorro $ vs OPUS', 'Ahorro %');
+  sumHead.push('# Mejor precio', 'Ahorro prom.');
+
+  const sumBody = a.order.map((i, rank) => {
+    const p = provs[i];
+    const row = [
+      String(rank + 1),
+      (p.nombre || '') + (i === a.winnerIdx ? '  *' : ''),
+      p.aceptaSinIva ? 'Sin IVA' : '+IVA',
+      `${a.cotizados[i]} / ${rows.length}` + (a.full[i] ? '' : ' (incompleto)')
+    ];
+    if (a.hasCant) {
+      row.push(money(a.totalProv[i]));
+      row.push(a.full[i] ? money(a.opusTotal - a.totalProv[i]) : '—');
+      row.push(a.full[i] && a.opusTotal > 0 ? fmtPct((a.opusTotal - a.totalProv[i]) / a.opusTotal) : '—');
+    }
+    row.push(String(a.mejores[i]));
+    row.push(a.ahorroN[i] > 0 ? fmtPct(a.ahorroAcum[i] / a.ahorroN[i]) : '—');
+    return row;
+  });
+
+  doc.autoTable({
+    startY: y + 8,
+    head: [sumHead],
+    body: sumBody,
+    styles: { font: 'helvetica', fontSize: 9, cellPadding: 5 },
+    headStyles: { fillColor: [40, 50, 65], textColor: 230, fontStyle: 'bold' },
+    columnStyles: { 0: { cellWidth: 22, halign: 'center' } },
+    margin: { left: 30, right: 30, bottom: 60 },
+    didParseCell: (data) => {
+      if (data.section === 'body' && a.order[data.row.index] === a.winnerIdx) {
+        data.cell.styles.fillColor = [225, 245, 233];
+        data.cell.styles.fontStyle = 'bold';
+      }
+    },
+    didDrawPage: (data) => drawFooter(doc, data)
+  });
+
+  let yr = doc.lastAutoTable.finalY + 10;
+  if (a.winnerIdx >= 0) {
+    const w = provs[a.winnerIdx];
+    doc.setFont('helvetica', 'bold').setFontSize(10).setTextColor(20, 120, 70);
+    const linea = a.hasCant && a.full[a.winnerIdx]
+      ? `Opción más económica: ${w.nombre} — ${money(a.totalProv[a.winnerIdx])} (ahorro ${fmtPct((a.opusTotal - a.totalProv[a.winnerIdx]) / a.opusTotal)} vs OPUS)`
+      : `Proveedor con más precios ganadores: ${w.nombre} (${a.mejores[a.winnerIdx]} de ${rows.length})`;
+    doc.text(linea, 30, yr);
+    yr += 14;
   }
+  if (a.hasCant) {
+    doc.setFont('helvetica', 'italic').setFontSize(8).setTextColor(110);
+    doc.text(`Referencia catálogo OPUS (s/IVA): ${money(a.opusTotal)}`, 30, yr);
+  }
+
+  // ===== Detalle por material =====
+  doc.addPage();
+  doc.setFont('helvetica', 'bold').setFontSize(11).setTextColor(40);
+  doc.text('DETALLE POR MATERIAL', 30, 60);
+
+  const head = ['Clave', 'Descripción', 'U.'];
+  if (a.hasCant) head.push('Cant.');
+  head.push('OPUS s/IVA');
+  if (hayProvConIva) head.push('OPUS +IVA');
+  for (const p of provs) head.push((p.nombre || '') + (p.aceptaSinIva ? ' (s/IVA)' : ' (+IVA)'));
+  const opusIdx = 3 + (a.hasCant ? 1 : 0);
+  const baseCols = opusIdx + 1 + (hayProvConIva ? 1 : 0);   // columnas antes de proveedores
+
+  const body = rows.map((r) => {
+    const opus = Number(r.opus) || 0;
+    const line = [r.clave || '', r.descripcion || '', r.unidad || ''];
+    if (a.hasCant) line.push(num2(r.cantidad));
+    line.push(opus > 0 ? money(opus) : '—');
+    if (hayProvConIva) line.push(opus > 0 ? money(opus * (1 + iva)) : '—');
+    provs.forEach((p, pi) => {
+      const cell = r.precios[pi];
+      const v = Number(cell?.valor) || 0;
+      line.push(!cell || v <= 0 ? (cell && cell.disponible === false ? 'no maneja' : '—') : money(v));
+    });
+    return line;
+  });
+
+  // Fila TOTAL (solo si hay cantidades — si no, sumar P.U. no tiene sentido).
+  if (a.hasCant) {
+    const tRow = new Array(head.length).fill('');
+    tRow[1] = 'TOTAL ESTIMADO';
+    tRow[opusIdx] = money(a.opusTotal);
+    if (hayProvConIva) tRow[opusIdx + 1] = money(a.opusTotal * (1 + iva));
+    provs.forEach((p, pi) => { tRow[baseCols + pi] = money(a.totalProv[pi]) + (a.full[pi] ? '' : ' *'); });
+    body.push(tRow);
+  }
+
+  const columnStyles = {
+    0: { cellWidth: 50, font: 'courier' },
+    1: { cellWidth: 150 },
+    2: { cellWidth: 22, halign: 'center' },
+    [opusIdx]: { halign: 'right', cellWidth: 52, textColor: [120, 120, 120] }
+  };
+  if (a.hasCant) columnStyles[3] = { halign: 'right', cellWidth: 40 };
+  if (hayProvConIva) columnStyles[opusIdx + 1] = { halign: 'right', cellWidth: 52, textColor: [120, 120, 120] };
+  for (let i = 0; i < provs.length; i++) columnStyles[baseCols + i] = { halign: 'right' };
+
+  const totalRowIdx = a.hasCant ? rows.length : -1;
+  doc.autoTable({
+    startY: 72,
+    head: [head],
+    body,
+    styles: { font: 'helvetica', fontSize: 7, cellPadding: 3, lineColor: [200, 210, 220], lineWidth: 0.3 },
+    headStyles: { fillColor: [40, 50, 65], textColor: 230, fontStyle: 'bold', halign: 'center' },
+    columnStyles,
+    margin: { left: 20, right: 20, bottom: 60 },
+    didParseCell: (data) => {
+      if (data.section !== 'body') return;
+      if (data.row.index === totalRowIdx) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = [240, 244, 248]; return; }
+      if (data.column.index < baseCols) return;
+      const pi = data.column.index - baseCols;
+      if (a.bestCells.has(`${data.row.index}:${pi}`)) {
+        data.cell.styles.textColor = [20, 120, 70];
+        data.cell.styles.fontStyle = 'bold';
+      }
+    },
+    didDrawPage: (data) => drawFooter(doc, data)
+  });
+
+  doc.save(`Comparativa_${safeName(solicitudNombre || m.nombre)}.pdf`);
+}
+
+// 7) ===== Comparativa ejecutiva de catálogo (materiales) — XLSX =====
+export function exportCatalogoComparativaXlsx(obra, payload) {
+  const m = obra?.meta || {};
+  const { provs = [], rows = [], hayProvConIva = false, iva = 0.16,
+    solicitudNombre = '', filtrosDesc = '' } = payload || {};
+  const a = analizarComparativaCatalogo(payload);
+
+  const header = ['Clave', 'Descripción', 'Unidad', 'Familia'];
+  if (a.hasCant) header.push('Cantidad');
+  header.push('OPUS s/IVA');
+  if (hayProvConIva) header.push('OPUS +IVA');
+  for (const p of provs) header.push(`${p.nombre || ''}${p.aceptaSinIva ? ' (s/IVA)' : ' (+IVA)'}`);
+  header.push('Mejor $ (s/IVA)', 'Mejor proveedor');
+
+  const aoa = [
+    ['COMPARATIVA EJECUTIVA — CATÁLOGO DE PRECIOS'],
+    ['OBRA:', m.nombre || '', '', 'SOLICITUD:', solicitudNombre || ''],
+    ['FECHA:', dateStr(Date.now()), '', `${rows.length} materiales · ${provs.length} proveedores${filtrosDesc ? ' · ' + filtrosDesc : ''}`],
+    [],
+    header
+  ];
+  const startData = aoa.length;
+  const opusCol = 4 + (a.hasCant ? 1 : 0);                  // índice de "OPUS s/IVA"
+  const baseCols = opusCol + 1 + (hayProvConIva ? 1 : 0);   // columnas antes de proveedores
+
+  rows.forEach((r, ri) => {
+    const opus = Number(r.opus) || 0;
+    const line = [r.clave || '', r.descripcion || '', r.unidad || '', r.familia || ''];
+    if (a.hasCant) line.push(Number(r.cantidad) || 0);
+    line.push(opus > 0 ? opus : '');
+    if (hayProvConIva) line.push(opus > 0 ? opus * (1 + iva) : '');
+    provs.forEach((p, pi) => {
+      const cell = r.precios[pi];
+      const v = Number(cell?.valor) || 0;
+      line.push(!cell || v <= 0 ? (cell && cell.disponible === false ? 'no maneja' : '') : v);
+    });
+    const bi = a.bestProvByRow[ri];
+    line.push(bi >= 0 ? a.norm(Number(r.precios[bi].valor) || 0, provs[bi].aceptaSinIva) : '');
+    line.push(bi >= 0 ? (provs[bi].nombre || '') : '');
+    aoa.push(line);
+  });
   const endData = aoa.length - 1;
 
-  // Bloque de análisis
+  // Fila TOTAL estimado (si hay cantidades)
+  if (a.hasCant) {
+    const tRow = new Array(header.length).fill('');
+    tRow[1] = 'TOTAL ESTIMADO';
+    tRow[opusCol] = a.opusTotal;
+    if (hayProvConIva) tRow[opusCol + 1] = a.opusTotal * (1 + iva);
+    provs.forEach((p, pi) => { tRow[baseCols + pi] = a.totalProv[pi]; });
+    aoa.push(tRow);
+  }
+  const lastTableRow = aoa.length - 1;
+
+  // Análisis por proveedor
   aoa.push([]);
   aoa.push(['ANÁLISIS POR PROVEEDOR']);
-  aoa.push(['Proveedor', 'Régimen', 'Cotizados', '# Mejor precio', 'Ahorro prom. vs OPUS']);
-  provs.forEach((p, i) => {
-    aoa.push([
-      p.nombre || '',
-      p.aceptaSinIva ? 'Acepta sin IVA' : 'Solo factura (+IVA)',
-      `${cotizados[i]} / ${rows.length}`,
-      mejores[i],
-      ahorroN[i] > 0 ? ahorroAcum[i] / ahorroN[i] : ''
-    ]);
+  const anaHead = ['#', 'Proveedor', 'Régimen', 'Cotizados'];
+  if (a.hasCant) anaHead.push('Total estimado', 'Ahorro $ vs OPUS', 'Ahorro %');
+  anaHead.push('# Mejor precio', 'Ahorro prom. vs OPUS');
+  aoa.push(anaHead);
+  a.order.forEach((i, rank) => {
+    const p = provs[i];
+    const row = [rank + 1, p.nombre || '', p.aceptaSinIva ? 'Acepta sin IVA' : 'Solo factura (+IVA)',
+      `${a.cotizados[i]} / ${rows.length}` + (a.full[i] ? '' : ' (incompleto)')];
+    if (a.hasCant) {
+      row.push(a.totalProv[i]);
+      row.push(a.full[i] ? a.opusTotal - a.totalProv[i] : '');
+      row.push(a.full[i] && a.opusTotal > 0 ? (a.opusTotal - a.totalProv[i]) / a.opusTotal : '');
+    }
+    row.push(a.mejores[i]);
+    row.push(a.ahorroN[i] > 0 ? a.ahorroAcum[i] / a.ahorroN[i] : '');
+    aoa.push(row);
   });
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(aoa);
 
-  // Anchos de columna
-  const cols = [{ wch: 14 }, { wch: 50 }, { wch: 8 }, { wch: 18 }, { wch: 12 }];
+  const cols = [{ wch: 14 }, { wch: 50 }, { wch: 8 }, { wch: 16 }];
+  if (a.hasCant) cols.push({ wch: 10 });
+  cols.push({ wch: 12 });
   if (hayProvConIva) cols.push({ wch: 12 });
   for (const _ of provs) cols.push({ wch: 16 });
   cols.push({ wch: 14 }, { wch: 22 });
   ws['!cols'] = cols;
 
-  // Formato moneda para columnas numéricas de la tabla (OPUS, proveedores, mejor $)
-  const firstMoneyCol = 4;                                   // OPUS s/IVA
-  const lastMoneyCol = header.length - 2;                    // "Mejor $ (s/IVA)"
-  for (let r = startData; r <= endData; r++) {
-    for (let c = firstMoneyCol; c <= lastMoneyCol; c++) {
-      setNumFmt(ws, r, c, '"$"#,##0.00');
-    }
+  // Formato moneda en columnas numéricas de la tabla (OPUS, proveedores, mejor $).
+  for (let r = startData; r <= lastTableRow; r++) {
+    for (let c = opusCol; c <= header.length - 2; c++) setNumFmt(ws, r, c, '"$"#,##0.00');
+    if (a.hasCant) setNumFmt(ws, r, 4, '#,##0.00');   // cantidad
   }
 
-  XLSX.utils.book_append_sheet(wb, ws, 'Comparativa precios');
-  XLSX.writeFile(wb, `Comparativa_precios_${safeName(m.nombre)}.xlsx`);
+  XLSX.utils.book_append_sheet(wb, ws, 'Comparativa');
+  XLSX.writeFile(wb, `Comparativa_${safeName(solicitudNombre || m.nombre)}.xlsx`);
 }
