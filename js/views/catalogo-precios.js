@@ -12,6 +12,7 @@ import {
 } from '../services/db.js';
 import { navigate } from '../state/router.js';
 import { dateMx, num, num0, money } from '../util/format.js';
+import { exportCatalogoComparativaPdf } from '../services/subcontrato-export.js';
 
 // Catálogo de precios pre-cotización. Tabla materiales × proveedores donde
 // el comprador captura proactivamente precios. Sirve para tener una base
@@ -83,6 +84,19 @@ export async function renderCatalogoPrecios({ params, query }) {
   // re-render solo cuando aplican filtros, no en cada keystroke (los inputs
   // viven con sus propios listeners).
   const dirty = new Map();  // `${provId}::${mk}` → { precio, notas, disponible }
+
+  // Columnas (proveedores) ocultas en esta vista. Se persisten por obra para
+  // que la "vista configurada" sobreviva recargas. Afecta tabla, filtros y PDF.
+  const HIDDEN_KEY = `compras:catalogo-cols:${obraId}`;
+  const hiddenProvs = new Set();
+  try {
+    const saved = JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]');
+    const validos = new Set(provsConDatos.map(p => provIdOf(p)));
+    if (Array.isArray(saved)) saved.forEach(id => { if (validos.has(id)) hiddenProvs.add(id); });
+  } catch { /* localStorage no disponible o JSON inválido: arrancamos sin ocultar */ }
+  function persistHidden() {
+    try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hiddenProvs])); } catch { /* ignore */ }
+  }
 
   // === Render top ===
   const search = h('input', { type: 'search', placeholder: 'Buscar por clave o descripción…', value: filtro, style: { width: '240px' } });
@@ -194,6 +208,71 @@ export async function renderCatalogoPrecios({ params, query }) {
     navigate(`/obras/${obraId}/solicitar-cotizacion?materiales=${q}`);
   });
 
+  // Botón "Columnas": ocultar proveedores que no aplican a esta vista.
+  const colsBtnLabel = () =>
+    `🔲 Columnas (${provsConDatos.length - hiddenProvs.size}/${provsConDatos.length})`;
+  const colsBtn = h('button', { class: 'btn ghost' }, colsBtnLabel());
+  colsBtn.addEventListener('click', async () => {
+    const checks = provsConDatos.map(p => {
+      const pid = provIdOf(p);
+      const cb = h('input', { type: 'checkbox', checked: !hiddenProvs.has(pid) });
+      return {
+        pid, cb,
+        el: h('label', { class: 'row', style: { gap: '8px', padding: '4px 0', cursor: 'pointer' } }, [
+          cb, h('span', {}, (p.nombre || '') + (p.aceptaSinIva ? ' (sin IVA)' : ' (+ IVA)'))
+        ])
+      };
+    });
+    const body = h('div', {}, [
+      h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } },
+        'Desmarca los proveedores que no apliquen a esta vista. Se ocultan de la tabla, los filtros y el PDF comparativo.'),
+      h('div', { class: 'row', style: { gap: '8px', marginBottom: '8px' } }, [
+        h('button', { class: 'btn sm ghost', type: 'button', onClick: () => checks.forEach(c => { c.cb.checked = true; }) }, 'Todos'),
+        h('button', { class: 'btn sm ghost', type: 'button', onClick: () => checks.forEach(c => { c.cb.checked = false; }) }, 'Ninguno')
+      ]),
+      ...checks.map(c => c.el)
+    ]);
+    const ok = await modal({ title: 'Proveedores visibles', body, confirmLabel: 'Aplicar' });
+    if (!ok) return;
+    hiddenProvs.clear();
+    checks.forEach(c => { if (!c.cb.checked) hiddenProvs.add(c.pid); });
+    persistHidden();
+    colsBtn.textContent = colsBtnLabel();
+    renderBody();
+  });
+
+  // Botón "PDF comparativa": exporta la vista actual (materiales × proveedores
+  // visibles) a un PDF de comparación de precios.
+  const pdfBtn = h('button', { class: 'btn ghost' }, '📄 PDF comparativa');
+  pdfBtn.addEventListener('click', () => {
+    const { provsParaFila, hayProvConIvaVisible, visibles, detalleFiltros } = computeView();
+    if (visibles.length === 0) { toast('No hay materiales en la vista actual', 'danger'); return; }
+    if (provsParaFila.length === 0) { toast('No hay proveedores visibles', 'danger'); return; }
+    if (dirty.size > 0) toast('El PDF usa los valores en pantalla (incluye cambios sin guardar)', 'warn');
+    const cap = 1000;
+    const rows = visibles.slice(0, cap).map(mk => {
+      const mm = materiales[mk];
+      return {
+        clave: mm.clave || mk.slice(0, 10),
+        descripcion: mm.descripcion || '',
+        unidad: mm.unidad || '',
+        familia: mm.familia || '',
+        opus: Number(mm.costoUnitario) || 0,
+        precios: provsParaFila.map(p => {
+          const eff = getEffectivePrecio(provIdOf(p), mk);
+          return { valor: Number(eff.precio) || 0, disponible: eff.disponible !== false };
+        })
+      };
+    });
+    exportCatalogoComparativaPdf({ meta }, {
+      provs: provsParaFila.map(p => ({ nombre: p.nombre, aceptaSinIva: !!p.aceptaSinIva })),
+      rows,
+      hayProvConIva: hayProvConIvaVisible,
+      iva: IVA_PCT,
+      filtrosDesc: detalleFiltros.join(', ')
+    });
+  });
+
   const filtros = h('div', { style: { marginBottom: '12px' } }, [
     h('div', { class: 'row', style: { gap: '10px' } }, [
       search,
@@ -207,6 +286,8 @@ export async function renderCatalogoPrecios({ params, query }) {
         incompletosCb, h('span', {}, 'Solo incompletos')
       ]),
       h('div', { style: { flex: 1 } }),
+      colsBtn,
+      pdfBtn,
       solicitarBtn,
       h('button', { class: 'btn ghost', onClick: () => navigate(`/obras/${obraId}/proveedores`) }, '🏷️ Gestionar proveedores')
     ])
@@ -267,46 +348,39 @@ export async function renderCatalogoPrecios({ params, query }) {
     updateGuardarBtn();
   }
 
-  function renderBody() {
-    // Proveedores visibles según el filtro: si hay uno seleccionado, solo ese.
-    const provsVisibles = provFiltro
-      ? provsConDatos.filter(p => provIdOf(p) === provFiltro)
-      : provsConDatos;
-    // Si el filtro por proveedor no encuentra nada (raro), caemos a todos
-    const provsParaFila = provsVisibles.length > 0 ? provsVisibles : provsConDatos;
+  // Proveedores visibles: si hay filtro por uno solo manda ese; si no, todos
+  // menos los ocultados manualmente (con fallback a todos si se ocultaron todos).
+  function visibleProvs() {
+    if (provFiltro) {
+      const only = provsConDatos.filter(p => provIdOf(p) === provFiltro);
+      if (only.length) return only;
+    }
+    const shown = provsConDatos.filter(p => !hiddenProvs.has(provIdOf(p)));
+    return shown.length ? shown : provsConDatos;
+  }
 
-    // Recalculamos hayProvConIva solo sobre los visibles (la columna +IVA
-    // solo aparece si hace falta para los proveedores actualmente mostrados).
+  // Calcula proveedores y materiales visibles + descripción de filtros. Lo usan
+  // tanto el render de la tabla como la exportación a PDF (misma vista exacta).
+  function computeView() {
+    const provsParaFila = visibleProvs();
+    // La columna +IVA solo aparece si hace falta para los proveedores mostrados.
     const hayProvConIvaVisible = provsParaFila.some(p => p.aceptaSinIva === false);
 
-    // Subset por solicitud rápida (preset). Construimos un set con las
-    // claves del preset para filtrar abajo.
     const solicitudActiva = solicitudFiltro ? solicitudes[solicitudFiltro] : null;
-    const matsDelPreset = solicitudActiva
-      ? new Set(Object.keys(solicitudActiva.items || {}))
-      : null;
+    const matsDelPreset = solicitudActiva ? new Set(Object.keys(solicitudActiva.items || {})) : null;
 
-    // Filtrar materiales
     const visibles = matKeys.filter(mk => {
       const m = materiales[mk];
       if (matsDelPreset && !matsDelPreset.has(mk)) return false;
       if (filtro && !(`${m.clave || ''} ${m.descripcion || ''} ${m.marca || ''}`.toLowerCase().includes(filtro))) return false;
       if (famFiltro && m.familia !== famFiltro) return false;
       if (soloCotizados) {
-        // Filas donde el(los) proveedor(es) visible(s) tienen al menos un
-        // precio capturado. Si hay filtro por proveedor, solo cuenta ese.
-        const algunoTiene = provsParaFila.some(p => {
-          const pid = provIdOf(p);
-          const eff = getEffectivePrecio(pid, mk);
-          return Number(eff.precio) > 0;
-        });
+        const algunoTiene = provsParaFila.some(p => Number(getEffectivePrecio(provIdOf(p), mk).precio) > 0);
         if (!algunoTiene) return false;
       }
       if (soloIncompletos) {
-        // Incompleto si algún proveedor visible no tiene precio (ni marcado no-disp)
         const incomp = provsParaFila.some(p => {
-          const pid = provIdOf(p);
-          const eff = getEffectivePrecio(pid, mk);
+          const eff = getEffectivePrecio(provIdOf(p), mk);
           return !eff.precio && eff.disponible !== false;
         });
         if (!incomp) return false;
@@ -318,12 +392,19 @@ export async function renderCatalogoPrecios({ params, query }) {
     if (provFiltro) {
       const pName = provsConDatos.find(p => provIdOf(p) === provFiltro)?.nombre || '';
       detalleFiltros.push(`proveedor: ${pName}`);
+    } else if (hiddenProvs.size > 0) {
+      detalleFiltros.push(`${provsParaFila.length} de ${provsConDatos.length} proveedores`);
     }
-    if (solicitudActiva) {
-      detalleFiltros.push(`solicitud: ${solicitudActiva.nombre || solicitudFiltro.slice(0, 6)}`);
-    }
+    if (solicitudActiva) detalleFiltros.push(`solicitud: ${solicitudActiva.nombre || solicitudFiltro.slice(0, 6)}`);
     if (soloCotizados) detalleFiltros.push('solo cotizados');
     if (soloIncompletos) detalleFiltros.push('solo incompletos');
+
+    return { provsParaFila, hayProvConIvaVisible, solicitudActiva, visibles, detalleFiltros };
+  }
+
+  function renderBody() {
+    const { provsParaFila, hayProvConIvaVisible, solicitudActiva, visibles, detalleFiltros } = computeView();
+
     const sufijo = detalleFiltros.length > 0 ? ` · filtros: ${detalleFiltros.join(', ')}` : '';
     sumaryEl.textContent = `Mostrando ${num0(visibles.length)} de ${num0(matKeys.length)} materiales${sufijo}.`;
 

@@ -7,6 +7,9 @@
 //   3. parseLicitanteXlsx  — lee el XLSX devuelto y extrae precios.
 //   4. exportComparativaXlsx / exportComparativaPdf — comparativa lista
 //      para revisión offline o presentar a dirección.
+//   5. exportCatalogoComparativaPdf — comparativa de precios pre-cotización
+//      (materiales × proveedores) tal como se ve en la vista de catálogo,
+//      respetando filtros y columnas ocultas.
 //
 // El XLSX para licitante incluye una fila "marca" con metadata para que al
 // importarse se reconozca como template de subcontrato de compras.
@@ -570,4 +573,132 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
   });
 
   doc.save(`Comparativa_${safeName(m.nombre)}_${safeName(meta.nombre)}.pdf`);
+}
+
+// 6) ===== Comparativa de catálogo de precios (pre-cotización) PDF =====
+//
+// A diferencia de la comparativa de subcontrato (que usa el alcance de un
+// subcontrato con cantidades), esta toma la vista de catálogo: materiales del
+// catálogo × proveedores asignados, con su precio capturado. Como no hay
+// cantidades, la comparación es por precio unitario normalizado a "sin IVA"
+// (los proveedores que solo facturan se comparan dividiendo entre 1+IVA).
+//
+// payload: {
+//   provs:        [{ nombre, aceptaSinIva }]   columnas en orden de despliegue
+//   rows:         [{ clave, descripcion, unidad, familia, opus,
+//                    precios: [{ valor, disponible }] }]  (paralelo a provs)
+//   hayProvConIva: bool  (muestra columna "OPUS +IVA")
+//   iva:          0.16
+//   filtrosDesc:  string descriptivo de los filtros activos
+// }
+export function exportCatalogoComparativaPdf(obra, payload) {
+  const m = obra?.meta || {};
+  const { provs = [], rows = [], hayProvConIva = false, iva = 0.16, filtrosDesc = '' } = payload || {};
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+  let y = drawHeader(doc, obra, 'COMPARATIVA DE PRECIOS');
+
+  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(70);
+  doc.text(`${rows.length} materiales · ${provs.length} proveedores${filtrosDesc ? ' · ' + filtrosDesc : ''}`, 30, y);
+
+  // Normaliza a precio comparable sin IVA.
+  const norm = (val, aceptaSinIva) => (aceptaSinIva ? val : val / (1 + iva));
+
+  // Acumuladores de análisis por proveedor.
+  const cotizados = provs.map(() => 0);
+  const mejores = provs.map(() => 0);
+  const ahorroAcum = provs.map(() => 0);
+  const ahorroN = provs.map(() => 0);
+
+  const head = ['Clave', 'Descripción', 'U.', 'OPUS s/IVA'];
+  if (hayProvConIva) head.push('OPUS +IVA');
+  for (const p of provs) head.push((p.nombre || '') + (p.aceptaSinIva ? ' (s/IVA)' : ' (+IVA)'));
+  const baseCols = hayProvConIva ? 5 : 4;
+
+  const body = [];
+  const bestCells = new Set();   // `${rowIdx}:${provIdx}` de la celda más barata
+  rows.forEach((r, ri) => {
+    const opus = Number(r.opus) || 0;
+    const opusIva = opus * (1 + iva);
+
+    let best = Infinity;
+    provs.forEach((p, pi) => {
+      const cell = r.precios[pi];
+      const v = Number(cell?.valor) || 0;
+      if (!cell || cell.disponible === false || v <= 0) return;
+      const nn = norm(v, p.aceptaSinIva);
+      if (nn < best) best = nn;
+    });
+
+    const line = [r.clave || '', r.descripcion || '', r.unidad || '', opus > 0 ? money(opus) : '—'];
+    if (hayProvConIva) line.push(opus > 0 ? money(opusIva) : '—');
+
+    provs.forEach((p, pi) => {
+      const cell = r.precios[pi];
+      const v = Number(cell?.valor) || 0;
+      if (!cell || v <= 0) {
+        line.push(cell && cell.disponible === false ? 'no maneja' : '—');
+        return;
+      }
+      cotizados[pi]++;
+      const nn = norm(v, p.aceptaSinIva);
+      const ref = p.aceptaSinIva ? opus : opusIva;
+      if (ref > 0) { ahorroAcum[pi] += (ref - v) / ref; ahorroN[pi]++; }
+      if (best < Infinity && Math.abs(nn - best) < 0.005) { mejores[pi]++; bestCells.add(`${ri}:${pi}`); }
+      line.push(money(v));
+    });
+    body.push(line);
+  });
+
+  const columnStyles = {
+    0: { cellWidth: 54, font: 'courier' },
+    1: { cellWidth: 150 },
+    2: { cellWidth: 26, halign: 'center' },
+    3: { halign: 'right', cellWidth: 52, textColor: [120, 120, 120] }
+  };
+  if (hayProvConIva) columnStyles[4] = { halign: 'right', cellWidth: 52, textColor: [120, 120, 120] };
+  for (let i = 0; i < provs.length; i++) columnStyles[baseCols + i] = { halign: 'right' };
+
+  doc.autoTable({
+    startY: y + 12,
+    head: [head],
+    body,
+    styles: { font: 'helvetica', fontSize: 7, cellPadding: 3, lineColor: [200, 210, 220], lineWidth: 0.3 },
+    headStyles: { fillColor: [40, 50, 65], textColor: 230, fontStyle: 'bold', halign: 'center' },
+    columnStyles,
+    margin: { left: 20, right: 20, bottom: 60 },
+    didParseCell: (data) => {
+      if (data.section !== 'body' || data.column.index < baseCols) return;
+      const pi = data.column.index - baseCols;
+      if (bestCells.has(`${data.row.index}:${pi}`)) {
+        data.cell.styles.textColor = [20, 120, 70];
+        data.cell.styles.fontStyle = 'bold';
+      }
+    },
+    didDrawPage: (data) => drawFooter(doc, data)
+  });
+
+  // Análisis por proveedor
+  let yy = doc.lastAutoTable.finalY + 20;
+  if (yy > 500) { doc.addPage(); yy = 100; }
+  doc.setFont('helvetica', 'bold').setFontSize(11).setTextColor(40);
+  doc.text('ANÁLISIS', 30, yy);
+  doc.autoTable({
+    startY: yy + 8,
+    head: [['Proveedor', 'Régimen', 'Cotizados', '# Mejor precio', 'Ahorro prom. vs OPUS']],
+    body: provs.map((p, i) => [
+      p.nombre || '',
+      p.aceptaSinIva ? 'Acepta sin IVA' : 'Solo factura (+IVA)',
+      `${cotizados[i]} / ${rows.length}`,
+      String(mejores[i]),
+      ahorroN[i] > 0 ? fmtPct(ahorroAcum[i] / ahorroN[i]) : '—'
+    ]),
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 4 },
+    headStyles: { fillColor: [40, 50, 65], textColor: 230, fontStyle: 'bold' },
+    margin: { left: 30, right: 30, bottom: 60 },
+    didDrawPage: (data) => drawFooter(doc, data)
+  });
+
+  doc.save(`Comparativa_precios_${safeName(m.nombre)}.pdf`);
 }
