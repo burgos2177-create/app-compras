@@ -61,10 +61,6 @@ export async function renderCatalogoPrecios({ params, query }) {
   const provsConDatos = provs.map(p => mergeProveedorObraConGlobal(p, globales))
     .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
 
-  // Si hay al menos un proveedor que vende +IVA (no acepta sin IVA), mostramos
-  // la columna "Catálogo +IVA" para que la comparación sea justa.
-  const hayProvConIva = provsConDatos.some(p => p.aceptaSinIva === false);
-
   // Identidad usada para path en /preciosCatalogo/{provId}: proveedor_global_id si está,
   // si no el id local de obra (mismo criterio que en cotizaciones/OCs)
   const provIdOf = (p) => p.proveedor_global_id || p.id;
@@ -120,7 +116,7 @@ export async function renderCatalogoPrecios({ params, query }) {
     ...provsConDatos.map(p => h('option', {
       value: provIdOf(p),
       selected: provIdOf(p) === provFiltro
-    }, p.nombre + (p.aceptaSinIva ? ' (sin IVA)' : ' (+ IVA)')))
+    }, p.nombre)))
   ]);
   provFiltroSel.addEventListener('change', () => { provFiltro = provFiltroSel.value; renderBody(); });
 
@@ -161,6 +157,7 @@ export async function renderCatalogoPrecios({ params, query }) {
       tasks.push(setPrecioCatalogo(obraId, provId, mk, {
         precio: precio > 0 ? precio : 0,
         disponible: data.disponible !== false,
+        sinIva: data.sinIva === true,   // celda marcada "considerar sin IVA" (sin factura)
         notas: data.notas || '',
         capturadoPor: autor
       }));
@@ -220,7 +217,7 @@ export async function renderCatalogoPrecios({ params, query }) {
       return {
         pid, cb,
         el: h('label', { class: 'row', style: { gap: '8px', padding: '4px 0', cursor: 'pointer' } }, [
-          cb, h('span', {}, (p.nombre || '') + (p.aceptaSinIva ? ' (sin IVA)' : ' (+ IVA)'))
+          cb, h('span', {}, p.nombre || '')
         ])
       };
     });
@@ -246,7 +243,7 @@ export async function renderCatalogoPrecios({ params, query }) {
   // solicitud cuando hay una seleccionada) × los proveedores activos, con las
   // cantidades estimadas de la solicitud. Devuelve null y avisa si no hay datos.
   function buildComparativaPayload() {
-    const { provsParaFila, hayProvConIvaVisible, solicitudActiva, visibles, detalleFiltros } = computeView();
+    const { provsParaFila, solicitudActiva, visibles, detalleFiltros } = computeView();
     if (visibles.length === 0) { toast('No hay materiales en la vista actual', 'danger'); return null; }
     if (provsParaFila.length === 0) { toast('No hay proveedores activos', 'danger'); return null; }
     if (dirty.size > 0) toast('La comparativa usa los valores en pantalla (incluye cambios sin guardar)', 'warn');
@@ -263,14 +260,13 @@ export async function renderCatalogoPrecios({ params, query }) {
         cantidad: Number(items[mk]?.cantidad) || 0,
         precios: provsParaFila.map(p => {
           const eff = getEffectivePrecio(provIdOf(p), mk);
-          return { valor: Number(eff.precio) || 0, disponible: eff.disponible !== false };
+          return { valor: Number(eff.precio) || 0, disponible: eff.disponible !== false, sinIva: eff.sinIva === true };
         })
       };
     });
     return {
-      provs: provsParaFila.map(p => ({ nombre: p.nombre, aceptaSinIva: !!p.aceptaSinIva })),
+      provs: provsParaFila.map(p => ({ nombre: p.nombre })),
       rows,
-      hayProvConIva: hayProvConIvaVisible,
       iva: IVA_PCT,
       solicitudNombre: solicitudActiva?.nombre || '',
       filtrosDesc: detalleFiltros.join(', ')
@@ -300,7 +296,9 @@ export async function renderCatalogoPrecios({ params, query }) {
       colsBtn,
       solicitarBtn,
       h('button', { class: 'btn ghost', onClick: () => navigate(`/obras/${obraId}/proveedores`) }, '🏷️ Gestionar proveedores')
-    ])
+    ]),
+    h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '6px' } },
+      'Los precios se capturan CON IVA por defecto. Si una celda en particular sale sin factura, usa el botón "iva" junto al precio para marcarla SIN IVA (se vuelve s/IVA en ámbar).')
   ]);
 
   // === Vacíos ===
@@ -343,10 +341,11 @@ export async function renderCatalogoPrecios({ params, query }) {
     const k = `${provId}::${mk}`;
     if (dirty.has(k)) return dirty.get(k);
     const entry = (precios[provId] || {})[mk];
-    if (!entry) return { precio: '', disponible: true, notas: '' };
+    if (!entry) return { precio: '', disponible: true, notas: '', sinIva: false };
     return {
       precio: entry.disponible === false ? '' : (entry.precio || ''),
       disponible: entry.disponible !== false,
+      sinIva: entry.sinIva === true,
       notas: entry.notas || ''
     };
   }
@@ -373,9 +372,6 @@ export async function renderCatalogoPrecios({ params, query }) {
   // tanto el render de la tabla como la exportación a PDF (misma vista exacta).
   function computeView() {
     const provsParaFila = visibleProvs();
-    // La columna +IVA solo aparece si hace falta para los proveedores mostrados.
-    const hayProvConIvaVisible = provsParaFila.some(p => p.aceptaSinIva === false);
-
     const solicitudActiva = solicitudFiltro ? solicitudes[solicitudFiltro] : null;
     const matsDelPreset = solicitudActiva ? new Set(Object.keys(solicitudActiva.items || {})) : null;
 
@@ -409,11 +405,11 @@ export async function renderCatalogoPrecios({ params, query }) {
     if (soloCotizados) detalleFiltros.push('solo cotizados');
     if (soloIncompletos) detalleFiltros.push('solo incompletos');
 
-    return { provsParaFila, hayProvConIvaVisible, solicitudActiva, visibles, detalleFiltros };
+    return { provsParaFila, solicitudActiva, visibles, detalleFiltros };
   }
 
   function renderBody() {
-    const { provsParaFila, hayProvConIvaVisible, solicitudActiva, visibles, detalleFiltros } = computeView();
+    const { provsParaFila, solicitudActiva, visibles, detalleFiltros } = computeView();
 
     const sufijo = detalleFiltros.length > 0 ? ` · filtros: ${detalleFiltros.join(', ')}` : '';
     sumaryEl.textContent = `Mostrando ${num0(visibles.length)} de ${num0(matKeys.length)} materiales${sufijo}.`;
@@ -461,7 +457,9 @@ export async function renderCatalogoPrecios({ params, query }) {
       ]));
     }
 
-    // Header
+    // Header. Los precios se capturan CON IVA por defecto; ambas referencias
+    // OPUS (sin IVA y +IVA) se muestran siempre porque cada celda puede ser una
+    // u otra (botón "IVA" por celda).
     const thead = h('thead', {}, h('tr', {}, [
       h('th', { style: { minWidth: '320px', position: 'sticky', left: 0, background: 'var(--bg-2)', zIndex: 2 } }, 'Material'),
       h('th', { style: { minWidth: '70px' } }, 'Unidad'),
@@ -469,32 +467,28 @@ export async function renderCatalogoPrecios({ params, query }) {
         h('div', {}, 'Catálogo OPUS'),
         h('div', { class: 'muted', style: { fontSize: '10px', fontWeight: 'normal', textTransform: 'none', letterSpacing: 0 } }, 'sin IVA')
       ]),
-      hayProvConIvaVisible && h('th', { class: 'num', style: { minWidth: '110px' } }, [
+      h('th', { class: 'num', style: { minWidth: '110px' } }, [
         h('div', {}, 'Catálogo +IVA'),
         h('div', { class: 'muted', style: { fontSize: '10px', fontWeight: 'normal', textTransform: 'none', letterSpacing: 0 } }, `con ${(IVA_PCT * 100).toFixed(0)}% IVA`)
       ]),
       ...provsParaFila.map(p => h('th', {
         class: 'num',
         style: { minWidth: '130px' },
-        title: p.nombre + (p.aceptaSinIva ? ' · acepta sin IVA' : ' · siempre con IVA')
+        title: p.nombre
       }, [
         h('div', {}, (p.nombre || '').slice(0, 18)),
-        h('div', { style: { fontSize: '10px', fontWeight: 'normal', textTransform: 'none', letterSpacing: 0 } }, [
-          p.aceptaSinIva
-            ? h('span', { style: { color: 'var(--ok)' } }, 'sin IVA')
-            : h('span', { style: { color: 'var(--warn)' } }, '+ IVA')
-        ])
+        h('div', { class: 'muted', style: { fontSize: '10px', fontWeight: 'normal', textTransform: 'none', letterSpacing: 0 } }, 'con IVA')
       ]))
     ]));
 
     const tbody = h('tbody', {});
     const cap = 400;   // cap defensivo
     for (const mk of visibles.slice(0, cap)) {
-      tbody.appendChild(matRow(mk, provsParaFila, hayProvConIvaVisible));
+      tbody.appendChild(matRow(mk, provsParaFila));
     }
     if (visibles.length > cap) {
       tbody.appendChild(h('tr', {}, h('td', {
-        colSpan: 3 + provsParaFila.length + (hayProvConIvaVisible ? 1 : 0),
+        colSpan: 4 + provsParaFila.length,
         class: 'muted',
         style: { textAlign: 'center', padding: '12px', fontSize: '12px' }
       }, `Mostrando primeros ${cap}. Usa los filtros para acotar.`)));
@@ -505,20 +499,21 @@ export async function renderCatalogoPrecios({ params, query }) {
     tableWrap.appendChild(tbl);
   }
 
-  function matRow(mk, provsParaFila, hayProvConIvaVisible) {
+  function matRow(mk, provsParaFila) {
     const m = materiales[mk];
     const opusPrecio = Number(m.costoUnitario) || 0;
     const opusConIva = conIva(opusPrecio);
 
-    // Mejor normalizado calculado solo sobre los proveedores visibles
-    let mejorNormalizado = Infinity;
+    // Mejor costo efectivo de la fila (acreditando IVA). Por celda: si está
+    // marcada "sin IVA" el costo efectivo es el monto completo; si es "con IVA"
+    // (default) el efectivo es monto/1.16.
+    let mejorEfectivo = Infinity;
     for (const p of provsParaFila) {
-      const pid = provIdOf(p);
-      const eff = getEffectivePrecio(pid, mk);
+      const eff = getEffectivePrecio(provIdOf(p), mk);
       const v = Number(eff.precio) || 0;
       if (eff.disponible === false || v <= 0) continue;
-      const norm = p.aceptaSinIva ? v : (v / (1 + IVA_PCT));
-      if (norm < mejorNormalizado) mejorNormalizado = norm;
+      const efectivo = eff.sinIva ? v : (v / (1 + IVA_PCT));
+      if (efectivo < mejorEfectivo) mejorEfectivo = efectivo;
     }
 
     const tr = h('tr', {});
@@ -531,23 +526,23 @@ export async function renderCatalogoPrecios({ params, query }) {
     ]));
     tr.appendChild(h('td', { class: 'muted', style: { fontSize: '12px' } }, m.unidad || '—'));
     tr.appendChild(h('td', { class: 'num muted' }, opusPrecio > 0 ? money(opusPrecio) : '—'));
-    if (hayProvConIvaVisible) {
-      tr.appendChild(h('td', { class: 'num muted', style: { fontStyle: 'italic' } },
-        opusPrecio > 0 ? money(opusConIva) : '—'));
-    }
+    tr.appendChild(h('td', { class: 'num muted', style: { fontStyle: 'italic' } },
+      opusPrecio > 0 ? money(opusConIva) : '—'));
 
     for (const p of provsParaFila) {
-      const pid = provIdOf(p);
-      const refPrecio = p.aceptaSinIva ? opusPrecio : opusConIva;
-      tr.appendChild(precioCell(p, pid, mk, refPrecio, mejorNormalizado));
+      tr.appendChild(precioCell(p, provIdOf(p), mk, opusPrecio, opusConIva, mejorEfectivo));
     }
     return tr;
   }
 
-  function precioCell(p, provId, mk, refPrecio, mejorNormalizado) {
+  function precioCell(p, provId, mk, opusPrecio, opusConIva, mejorEfectivo) {
     const eff = getEffectivePrecio(provId, mk);
     const valor = eff.precio;
     const noDisp = eff.disponible === false;
+    const sinIva = eff.sinIva === true;
+    // Referencia OPUS según el régimen de la celda: sin IVA → OPUS sin IVA;
+    // con IVA (default) → OPUS +IVA (el monto capturado ya trae IVA).
+    const refPrecio = sinIva ? opusPrecio : opusConIva;
 
     const input = h('input', {
       type: 'number',
@@ -556,37 +551,36 @@ export async function renderCatalogoPrecios({ params, query }) {
       value: valor === '' ? '' : String(valor),
       placeholder: noDisp ? '— no maneja —' : '$',
       style: {
-        width: '100px',
+        width: '92px',
         textAlign: 'right',
         fontFamily: 'var(--mono)',
         background: noDisp ? 'rgba(108, 115, 132, 0.15)' : 'var(--bg-1)'
       }
     });
 
-    // Color según comparación contra el catálogo CORRECTO para este proveedor
-    // (OPUS si acepta sin IVA, OPUS+IVA si no). El "mejor de fila" se mide
-    // sobre precios normalizados sin IVA.
+    // Color contra la referencia OPUS correcta de la celda. El "mejor de fila"
+    // se mide sobre el costo efectivo (acreditando IVA en las celdas con IVA).
     function colorize() {
       const v = Number(input.value) || 0;
       if (!v || noDisp) {
         input.style.color = noDisp ? 'var(--text-2)' : 'var(--text-0)';
-        input.style.borderColor = 'var(--border)';
+        input.style.borderColor = sinIva ? 'rgba(245, 196, 81, 0.5)' : 'var(--border)';
         return;
       }
-      const norm = p.aceptaSinIva ? v : (v / (1 + IVA_PCT));
-      const esMejor = mejorNormalizado < Infinity && Math.abs(norm - mejorNormalizado) < 0.005;
+      const efectivo = sinIva ? v : (v / (1 + IVA_PCT));
+      const esMejor = mejorEfectivo < Infinity && Math.abs(efectivo - mejorEfectivo) < 0.005;
       if (esMejor) {
         input.style.color = 'var(--ok)';
         input.style.borderColor = 'rgba(93, 211, 158, 0.4)';
       } else if (refPrecio > 0 && v < refPrecio) {
         input.style.color = 'var(--ok)';
-        input.style.borderColor = 'var(--border)';
+        input.style.borderColor = sinIva ? 'rgba(245, 196, 81, 0.5)' : 'var(--border)';
       } else if (refPrecio > 0 && v > refPrecio) {
         input.style.color = 'var(--danger)';
-        input.style.borderColor = 'var(--border)';
+        input.style.borderColor = sinIva ? 'rgba(245, 196, 81, 0.5)' : 'var(--border)';
       } else {
         input.style.color = 'var(--text-0)';
-        input.style.borderColor = 'var(--border)';
+        input.style.borderColor = sinIva ? 'rgba(245, 196, 81, 0.5)' : 'var(--border)';
       }
     }
     colorize();
@@ -597,10 +591,26 @@ export async function renderCatalogoPrecios({ params, query }) {
     });
     input.addEventListener('blur', colorize);
 
-    // Tooltip con detalles fiscales
-    input.title = p.aceptaSinIva
-      ? `Comparado contra catálogo OPUS ${refPrecio > 0 ? '($' + refPrecio.toFixed(2) + ')' : ''}`
-      : `Comparado contra catálogo OPUS +IVA ${refPrecio > 0 ? '($' + refPrecio.toFixed(2) + ')' : ''} · proveedor solo factura`;
+    const v = Number(input.value) || 0;
+    input.title = sinIva
+      ? `SIN IVA (sin factura, no se acredita) · costo efectivo $${v.toFixed(2)} · ref. OPUS sin IVA${refPrecio > 0 ? ' ($' + refPrecio.toFixed(2) + ')' : ''}`
+      : `CON IVA (se acredita) · costo efectivo $${(v / (1 + IVA_PCT)).toFixed(2)} · ref. OPUS +IVA${refPrecio > 0 ? ' ($' + refPrecio.toFixed(2) + ')' : ''}`;
+
+    // Botón chico "considerar SIN IVA" para esta celda (toggle, default = con IVA).
+    const ivaBtn = !noDisp && h('button', {
+      type: 'button',
+      style: {
+        padding: '0 4px', fontSize: '9px', marginLeft: '2px',
+        background: 'transparent', border: 'none', cursor: 'pointer',
+        color: sinIva ? 'var(--warn)' : 'var(--text-2)',
+        fontWeight: sinIva ? '700' : '400'
+      },
+      title: sinIva ? 'Quitar: volver a CON IVA (se acredita)' : 'Considerar esta celda SIN IVA (sin factura, no se acredita)'
+    }, sinIva ? 's/IVA' : 'iva');
+    if (ivaBtn) ivaBtn.addEventListener('click', () => {
+      setDirty(provId, mk, { sinIva: !sinIva });
+      td.replaceWith(precioCell(p, provId, mk, opusPrecio, opusConIva, mejorEfectivo));
+    });
 
     // Botón pequeño para marcar "no maneja este material" (toggle disponible)
     const toggleBtn = h('button', {
@@ -614,16 +624,13 @@ export async function renderCatalogoPrecios({ params, query }) {
     }, noDisp ? '↺' : '⊘');
     toggleBtn.addEventListener('click', () => {
       const newNoDisp = !noDisp;
-      if (newNoDisp) {
-        input.value = '';
-      }
+      if (newNoDisp) input.value = '';
       setDirty(provId, mk, { precio: '', disponible: !newNoDisp });
-      const newCell = precioCell(p, provId, mk, refPrecio, mejorNormalizado);
-      td.replaceWith(newCell);
+      td.replaceWith(precioCell(p, provId, mk, opusPrecio, opusConIva, mejorEfectivo));
     });
 
     const td = h('td', { class: 'num', style: { padding: '4px 6px' } },
-      h('div', { class: 'row', style: { justifyContent: 'flex-end', gap: '0' } }, [input, toggleBtn]));
+      h('div', { class: 'row', style: { justifyContent: 'flex-end', gap: '0', alignItems: 'center' } }, [input, ivaBtn, toggleBtn]));
     return td;
   }
 
