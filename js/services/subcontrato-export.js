@@ -36,7 +36,10 @@ function money(n) {
 }
 function fmtPct(n) {
   if (!Number.isFinite(n)) return '—';
-  return (n >= 0 ? '−' : '+') + Math.abs(n * 100).toFixed(1) + '%';
+  // Ahorro positivo = se muestra en plano (ej. "12.6%"); sobrecosto con '-'.
+  // Solo ASCII: la fuente del PDF no tiene el signo menos Unicode (U+2212).
+  const v = n * 100;
+  return (v < 0 ? '-' : '') + Math.abs(v).toFixed(1) + '%';
 }
 function setNumFmt(ws, r, c, fmt) {
   const ref = XLSX.utils.encode_cell({ r, c });
@@ -653,6 +656,93 @@ function analizarComparativaCatalogo(payload) {
     opusTotal, bestCells, sinIvaCells, bestProvByRow, full, order, winnerIdx };
 }
 
+// Insights accionables para comparar proveedores de materiales en la vista
+// activa. Devuelve [{ t: título, d: detalle }]. Es texto narrativo, no tabla.
+function computeInsights(payload, a) {
+  const { provs = [], rows = [] } = payload || {};
+  const n = rows.length;
+  const ins = [];
+  const pct1 = (x) => (x * 100).toFixed(1) + '%';
+
+  let sinNinguna = 0, unaSola = 0, cubiertos = 0;
+  let basketBest = 0;                       // Σ cantidad × mejor costo efectivo
+  let sobreOpus = 0;                        // materiales cuyo mejor efectivo > OPUS
+  let disp = { pct: -1, clave: '', desc: '' };
+  rows.forEach((r) => {
+    const opus = Number(r.opus) || 0;
+    const cant = Number(r.cantidad) || 0;
+    const effs = provs.map((_, pi) => a.effOf(r.precios[pi])).filter(e => e != null);
+    if (!effs.length) { sinNinguna++; return; }
+    cubiertos++;
+    if (effs.length === 1) unaSola++;
+    const min = Math.min(...effs), max = Math.max(...effs);
+    basketBest += cant * min;
+    if (opus > 0 && min > opus) sobreOpus++;
+    if (min > 0 && max > min) {
+      const p = (max - min) / min;
+      if (p > disp.pct) disp = { pct: p, clave: r.clave || '', desc: r.descripcion || '' };
+    }
+  });
+
+  // 1) Recomendación: mejor opción de un solo proveedor.
+  if (a.winnerIdx >= 0) {
+    const w = provs[a.winnerIdx];
+    if (a.hasCant && a.full[a.winnerIdx]) {
+      ins.push({ t: `Mejor opción de un solo proveedor: ${w.nombre}`,
+        d: `Total efectivo ${money(a.totalProv[a.winnerIdx])} para el alcance cotizado: ${pct1((a.opusTotal - a.totalProv[a.winnerIdx]) / a.opusTotal)} de ahorro vs catálogo OPUS (${money(a.opusTotal)}). Cotizó ${a.cotizados[a.winnerIdx]} de ${n} materiales.` });
+    } else {
+      ins.push({ t: `Proveedor más competitivo: ${w.nombre}`,
+        d: `Ofrece el mejor precio en ${a.mejores[a.winnerIdx]} de ${n} materiales.` });
+    }
+  }
+
+  // 2) ¿Conviene dividir la compra entre proveedores?
+  if (a.hasCant && a.winnerIdx >= 0 && a.full[a.winnerIdx] && basketBest > 0) {
+    const single = a.totalProv[a.winnerIdx];
+    const dif = single - basketBest;
+    if (dif > 0.5) {
+      ins.push({ t: `Dividir la compra ahorra ${money(dif)} (${pct1(dif / single)})`,
+        d: `Comprando cada material con el proveedor más barato la canasta cuesta ${money(basketBest)} vs ${money(single)} concentrando en ${provs[a.winnerIdx].nombre}. Implica emitir varias órdenes de compra.` });
+    } else {
+      ins.push({ t: 'Conviene concentrar la compra en un solo proveedor',
+        d: `Dividir entre proveedores casi no mejora el costo (canasta óptima ${money(basketBest)}); la opción única simplifica la gestión sin perder ahorro.` });
+    }
+  }
+
+  // 3) Cobertura de la cotización.
+  const completos = a.full.filter(Boolean).length;
+  ins.push({ t: 'Cobertura de la cotización',
+    d: `${completos} de ${provs.length} proveedores cotizaron el 100% del alcance. ${cubiertos} de ${n} materiales tienen al menos un precio.` });
+
+  // 4) Riesgos: huecos y poca competencia.
+  if (sinNinguna > 0 || unaSola > 0) {
+    const partes = [];
+    if (sinNinguna > 0) partes.push(`${sinNinguna} material(es) sin ninguna cotización (faltan por solicitar)`);
+    if (unaSola > 0) partes.push(`${unaSola} con una sola cotización (poca competencia)`);
+    ins.push({ t: 'Atención', d: partes.join('; ') + '.' });
+  }
+
+  // 5) Dispersión / margen de negociación.
+  if (disp.pct > 0.01) {
+    ins.push({ t: `Mayor dispersión: ${disp.clave}`,
+      d: `${(disp.desc || '').slice(0, 60)} varía ${pct1(disp.pct)} entre el proveedor más caro y el más barato — margen para negociar.` });
+  }
+
+  // 6) Sobreprecio vs catálogo.
+  if (sobreOpus > 0) {
+    ins.push({ t: `${sobreOpus} material(es) por encima del catálogo OPUS`,
+      d: `Aun con la mejor cotización superan el costo OPUS (s/IVA). Conviene revisar especificación o buscar más proveedores.` });
+  }
+
+  // 7) Precios sin factura.
+  if (a.sinIvaCells.size > 0) {
+    ins.push({ t: `${a.sinIvaCells.size} precio(s) marcados SIN IVA`,
+      d: 'Se tomaron al monto completo (sin factura, no acreditable). Verifica que el ahorro compense no poder deducir el IVA.' });
+  }
+
+  return ins;
+}
+
 // 6) ===== Comparativa ejecutiva de catálogo (materiales) — PDF =====
 export function exportCatalogoComparativaPdf(obra, payload) {
   const m = obra?.meta || {};
@@ -726,6 +816,29 @@ export function exportCatalogoComparativaPdf(obra, payload) {
   if (a.hasCant) {
     doc.setFont('helvetica', 'italic').setFontSize(8).setTextColor(110);
     doc.text(`Referencia catálogo OPUS (s/IVA): ${money(a.opusTotal)}`, 30, yr);
+    yr += 12;
+  }
+
+  // ===== Insights =====
+  const insights = computeInsights(payload, a);
+  if (insights.length) {
+    let yi = yr + 16;
+    if (yi > 500) { doc.addPage(); yi = 60; }
+    doc.setFont('helvetica', 'bold').setFontSize(11).setTextColor(40);
+    doc.text('INSIGHTS', 30, yi);
+    yi += 16;
+    const wText = doc.internal.pageSize.width - 84;
+    for (const it of insights) {
+      const detLines = doc.splitTextToSize(it.d, wText);
+      const blockH = 12 + detLines.length * 11 + 8;
+      if (yi + blockH > 560) { doc.addPage(); yi = 60; }
+      doc.setFont('helvetica', 'bold').setFontSize(9.5).setTextColor(40);
+      doc.text('• ' + it.t, 30, yi);
+      yi += 12;
+      doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(80);
+      doc.text(detLines, 42, yi);
+      yi += detLines.length * 11 + 8;
+    }
   }
 
   // ===== Detalle por material =====
