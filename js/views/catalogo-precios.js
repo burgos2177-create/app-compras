@@ -116,7 +116,7 @@ export async function renderCatalogoPrecios({ params, query }) {
     ...provsConDatos.map(p => h('option', {
       value: provIdOf(p),
       selected: provIdOf(p) === provFiltro
-    }, p.nombre)))
+    }, p.nombre))
   ]);
   provFiltroSel.addEventListener('change', () => { provFiltro = provFiltroSel.value; renderBody(); });
 
