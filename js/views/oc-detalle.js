@@ -1,14 +1,14 @@
-import { h, toast, modal } from '../util/dom.js';
-import { renderShell } from './shell.js';
-import { state, setState } from '../state/store.js';
+import { h, toast, modal } from '../util/dom.js?v=20260605';
+import { renderShell } from './shell.js?v=20260605';
+import { state, setState } from '../state/store.js?v=20260605';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
   getOC, getBuzonItem, cancelarOC, updateOC
-} from '../services/db.js';
-import { navigate } from '../state/router.js';
-import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js';
-import { estadoOCBadge } from './oc.js';
+} from '../services/db.js?v=20260605';
+import { navigate } from '../state/router.js?v=20260605';
+import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260605';
+import { estadoOCBadge } from './oc.js?v=20260605';
 
 const ESTADOS_CANCELABLES = new Set(['borrador', 'enviada_buzon', 'aprobada', 'rechazada', 'huerfana']);
 
