@@ -11,6 +11,9 @@
 //      comparativa EJECUTIVA de los materiales de una solicitud × los
 //      proveedores activos, con ranking y total por proveedor (usando las
 //      cantidades de la solicitud). Compara MATERIALES, no conceptos.
+//   8. exportMaterialesOpusXlsx — lleva el catálogo de materiales a OPUS
+//      (Herramientas OLE → De Excel a OPUS). Formato Tipo/Clave/Descripción/
+//      Unidad/Costo base M.N./Costo base M.E./Familia.
 //
 // El XLSX para licitante incluye una fila "marca" con metadata para que al
 // importarse se reconozca como template de subcontrato de compras.
@@ -1007,4 +1010,39 @@ export function exportCatalogoComparativaXlsx(obra, payload) {
 
   XLSX.utils.book_append_sheet(wb, ws, 'Comparativa');
   XLSX.writeFile(wb, `Comparativa_${safeName(solicitudNombre || m.nombre)}.xlsx`);
+}
+
+// 8) ===== Export de materiales a OPUS (Herramientas OLE → De Excel a OPUS) =====
+//
+// Formato EXACTO que espera OPUS sobre la vista Materiales. OPUS empareja cada
+// insumo por CLAVE + UNIDAD: si existe actualiza su costo, si no lo crea. Por
+// eso la clave y la unidad van tal cual viven en la app. OPUS calcula/sella
+// "Costo unitario" y "Fecha"; NO se exportan.
+//
+// items: [{ clave, descripcion, unidad, familia, costo }]  (costo = MN, numérico)
+//   - costo es el precio del proveedor elegido por material (lo arma la vista).
+export function exportMaterialesOpusXlsx(items = []) {
+  const header = ['Tipo', 'Clave', 'Descripción', 'Unidad', 'Costo base M.N.', 'Costo base M.E.', 'Familia'];
+  const aoa = [header];
+  for (const it of items) {
+    aoa.push([
+      'Material',
+      String(it.clave || '').trim(),
+      it.descripcion || '',
+      it.unidad || '',
+      Number(it.costo) || 0,   // numérico, sin "$" ni comas
+      0,                       // Costo base M.E. (sin moneda extranjera)
+      it.familia || ''
+    ]);
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 10 }, { wch: 16 }, { wch: 52 }, { wch: 8 }, { wch: 16 }, { wch: 16 }, { wch: 20 }];
+  for (let r = 1; r < aoa.length; r++) {
+    setNumFmt(ws, r, 4, '#,##0.00');   // Costo base M.N.
+    setNumFmt(ws, r, 5, '#,##0.00');   // Costo base M.E.
+  }
+  XLSX.utils.book_append_sheet(wb, ws, 'Materiales');
+  XLSX.writeFile(wb, `Materiales_OPUS_${dateStr(Date.now()).replace(/\s/g, '')}.xlsx`);
 }

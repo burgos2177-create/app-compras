@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260605';
-import { renderShell } from './shell.js?v=20260605';
-import { state, setState } from '../state/store.js?v=20260605';
+import { h, toast, modal } from '../util/dom.js?v=20260606';
+import { renderShell } from './shell.js?v=20260606';
+import { state, setState } from '../state/store.js?v=20260606';
 import {
   getObraMetaLegacy,
   loadCatalogoMateriales,
@@ -9,10 +9,10 @@ import {
   setPrecioCatalogo, removePrecioCatalogo,
   listProveedoresGlobal, mergeProveedorObraConGlobal,
   listSolicitudesCotizacion
-} from '../services/db.js?v=20260605';
-import { navigate } from '../state/router.js?v=20260605';
-import { dateMx, num, num0, money } from '../util/format.js?v=20260605';
-import { exportCatalogoComparativaPdf, exportCatalogoComparativaXlsx } from '../services/subcontrato-export.js?v=20260605';
+} from '../services/db.js?v=20260606';
+import { navigate } from '../state/router.js?v=20260606';
+import { dateMx, num, num0, money } from '../util/format.js?v=20260606';
+import { exportCatalogoComparativaPdf, exportCatalogoComparativaXlsx, exportMaterialesOpusXlsx } from '../services/subcontrato-export.js?v=20260606';
 
 // Catálogo de precios pre-cotización. Tabla materiales × proveedores donde
 // el comprador captura proactivamente precios. Sirve para tener una base
@@ -280,6 +280,121 @@ export async function renderCatalogoPrecios({ params, query }) {
     else exportCatalogoComparativaXlsx({ meta }, payload);
   }
 
+  // Export a OPUS (Herramientas OLE → De Excel a OPUS): reconstruye costos de
+  // materiales con los precios capturados. OPUS empareja por Clave + Unidad, y
+  // cada material lleva UN solo costo, por eso abrimos un cuadro para elegir,
+  // por material, qué proveedor usar cuando hay más de uno.
+  async function opusExportFlow() {
+    const { provsParaFila, visibles } = computeView();
+    if (visibles.length === 0) { toast('No hay materiales en la vista actual', 'danger'); return; }
+
+    const mats = [];
+    let sinPrecio = 0;
+    for (const mk of visibles) {
+      const m = materiales[mk];
+      const opts = [];
+      for (const p of provsParaFila) {
+        const eff = getEffectivePrecio(provIdOf(p), mk);
+        const raw = Number(eff.precio) || 0;
+        if (eff.disponible === false || raw <= 0) continue;
+        opts.push({ pid: provIdOf(p), nombre: p.nombre, raw, sinIva: eff.sinIva === true, base: eff.sinIva ? raw : raw / (1 + IVA_PCT) });
+      }
+      if (!opts.length) { sinPrecio++; continue; }
+      opts.sort((a, b) => a.base - b.base);   // más barato primero (default)
+      mats.push({ mk, m, opts, _inc: null, _radios: null });
+    }
+    if (!mats.length) { toast('Ningún material visible tiene precio en los proveedores activos', 'danger'); return; }
+
+    // Selector de base: por defecto "tal cual" (con IVA) porque OPUS suele
+    // recibir el costo capturado; opción sin IVA (efectivo) si se prefiere.
+    const basisConIva = h('input', { type: 'radio', name: 'opx-basis', checked: true });
+    const basisSinIva = h('input', { type: 'radio', name: 'opx-basis' });
+    const labelStyle = { display: 'inline-flex', gap: '5px', alignItems: 'center', cursor: 'pointer', fontSize: '12px' };
+
+    const prefSel = h('select', { style: { fontSize: '12px' } }, [
+      h('option', { value: '' }, 'Preferir proveedor…'),
+      ...provsParaFila.map(p => h('option', { value: provIdOf(p) }, p.nombre))
+    ]);
+
+    const lista = h('div', {});
+    mats.forEach(mat => {
+      const inc = h('input', { type: 'checkbox', checked: true });
+      mat._inc = inc;
+      const radios = mat.opts.map(o => {
+        const r = h('input', { type: 'radio', name: `opx-${mat.mk}`, checked: o.pid === mat.opts[0].pid });
+        return {
+          o, r,
+          el: h('label', { style: { ...labelStyle, marginRight: '12px' } }, [
+            r, h('span', {}, `${o.nombre}: ${money(o.raw)}${o.sinIva ? ' (s/IVA)' : ''}`)
+          ])
+        };
+      });
+      mat._radios = radios;
+      lista.appendChild(h('div', { style: { padding: '8px 0', borderBottom: '1px solid var(--border)' } }, [
+        h('label', { style: { ...labelStyle, fontSize: '13px' } }, [
+          inc,
+          h('span', {}, [
+            h('b', { class: 'mono', style: { fontSize: '11px' } }, mat.m.clave || mat.mk.slice(0, 10)),
+            ' ', (mat.m.descripcion || '').slice(0, 55),
+            h('span', { class: 'muted' }, ` (${mat.m.unidad || '—'})`)
+          ])
+        ]),
+        mat.opts.length > 1
+          ? h('div', { style: { marginLeft: '22px', marginTop: '4px', display: 'flex', flexWrap: 'wrap' } }, radios.map(x => x.el))
+          : h('div', { style: { marginLeft: '22px', marginTop: '2px', fontSize: '12px', color: 'var(--text-2)' } },
+            `${mat.opts[0].nombre}: ${money(mat.opts[0].raw)}${mat.opts[0].sinIva ? ' (s/IVA)' : ''}`)
+      ]));
+    });
+
+    prefSel.addEventListener('change', () => {
+      const pid = prefSel.value;
+      if (!pid) return;
+      mats.forEach(mat => {
+        const idx = mat._radios.findIndex(x => x.o.pid === pid);
+        if (idx >= 0) mat._radios.forEach((x, i) => { x.r.checked = i === idx; });
+      });
+    });
+
+    const body = h('div', {}, [
+      h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '8px' } }, [
+        'OPUS empareja por ', h('b', {}, 'Clave + Unidad'), '. Se genera una fila por material con el precio del proveedor elegido. ',
+        sinPrecio > 0 ? h('span', {}, `${num0(sinPrecio)} material(es) sin precio se omiten.`) : null
+      ]),
+      h('div', { class: 'row', style: { gap: '14px', flexWrap: 'wrap', marginBottom: '8px', alignItems: 'center' } }, [
+        h('span', { style: { fontSize: '12px', fontWeight: 600 } }, 'Costo base:'),
+        h('label', { style: labelStyle }, [basisConIva, h('span', {}, 'Tal como se capturó (con IVA)')]),
+        h('label', { style: labelStyle }, [basisSinIva, h('span', {}, 'Sin IVA (efectivo ÷1.16)')])
+      ]),
+      h('div', { class: 'row', style: { gap: '10px', marginBottom: '6px', alignItems: 'center' } }, [
+        h('button', { class: 'btn sm ghost', type: 'button', onClick: () => mats.forEach(x => { x._inc.checked = true; }) }, 'Incluir todos'),
+        h('button', { class: 'btn sm ghost', type: 'button', onClick: () => mats.forEach(x => { x._inc.checked = false; }) }, 'Ninguno'),
+        prefSel
+      ]),
+      h('div', { style: { maxHeight: '50vh', overflow: 'auto', border: '1px solid var(--border)', borderRadius: '6px', padding: '0 12px' } }, lista)
+    ]);
+
+    const ok = await modal({ title: `Exportar a OPUS (${num0(mats.length)} materiales)`, body, confirmLabel: 'Exportar XLSX', size: 'lg' });
+    if (!ok) return;
+
+    const useSinIva = basisSinIva.checked;
+    const items = [];
+    for (const mat of mats) {
+      if (!mat._inc.checked) continue;
+      const chosen = (mat._radios.find(x => x.r.checked) || mat._radios[0]).o;
+      const costo = useSinIva ? chosen.base : chosen.raw;
+      items.push({
+        clave: mat.m.clave || mat.mk,
+        descripcion: mat.m.descripcion || '',
+        unidad: mat.m.unidad || '',
+        familia: mat.m.familia || '',
+        costo: Math.round(costo * 100) / 100
+      });
+    }
+    if (!items.length) { toast('No seleccionaste materiales', 'warn'); return; }
+    exportMaterialesOpusXlsx(items);
+    toast(`${items.length} material(es) exportados a formato OPUS`, 'ok');
+  }
+
   const filtros = h('div', { style: { marginBottom: '12px' } }, [
     h('div', { class: 'row', style: { gap: '10px' } }, [
       search,
@@ -294,6 +409,7 @@ export async function renderCatalogoPrecios({ params, query }) {
       ]),
       h('div', { style: { flex: 1 } }),
       colsBtn,
+      h('button', { class: 'btn ghost', title: 'Exportar el catálogo (vista actual) al formato de OPUS: Herramientas OLE → De Excel a OPUS', onClick: () => opusExportFlow() }, '⤓ OPUS materiales'),
       solicitarBtn,
       h('button', { class: 'btn ghost', onClick: () => navigate(`/obras/${obraId}/proveedores`) }, '🏷️ Gestionar proveedores')
     ]),
