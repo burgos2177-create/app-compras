@@ -1,9 +1,9 @@
-import { h, toast } from '../util/dom.js?v=20260606';
-import { renderShell } from './shell.js?v=20260606';
-import { state, setState } from '../state/store.js?v=20260606';
-import { listObrasForUser, listBuzon, filtrarBuzon } from '../services/db.js?v=20260606';
-import { navigate } from '../state/router.js?v=20260606';
-import { dateMx, num0 } from '../util/format.js?v=20260606';
+import { h, toast } from '../util/dom.js?v=20260607';
+import { renderShell } from './shell.js?v=20260607';
+import { state, setState } from '../state/store.js?v=20260607';
+import { listObrasForUser, listBuzon, filtrarBuzon } from '../services/db.js?v=20260607';
+import { navigate } from '../state/router.js?v=20260607';
+import { dateMx, num0 } from '../util/format.js?v=20260607';
 
 export async function renderObrasList() {
   renderShell([{ label: 'Obras' }], h('div', { class: 'empty' }, 'Cargando obras…'));

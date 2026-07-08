@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260606';
-import { renderShell } from './shell.js?v=20260606';
-import { state, setState } from '../state/store.js?v=20260606';
+import { h, toast, modal } from '../util/dom.js?v=20260607';
+import { renderShell } from './shell.js?v=20260607';
+import { state, setState } from '../state/store.js?v=20260607';
 import {
   getObraMetaLegacy, getSubcontrato, updateSubcontratoMeta,
   addSubcontratoConcepto, addSubcontratoConceptosBulk,
@@ -10,15 +10,15 @@ import {
   adjudicarSubcontrato, desadjudicarSubcontrato,
   loadCatalogoConceptos,
   listProveedoresObra, listProveedoresGlobal, mergeProveedorObraConGlobal
-} from '../services/db.js?v=20260606';
-import { navigate } from '../state/router.js?v=20260606';
-import { dateMx, num, num0, money } from '../util/format.js?v=20260606';
-import { estadoSCBadge } from './subcontratos.js?v=20260606';
+} from '../services/db.js?v=20260607';
+import { navigate } from '../state/router.js?v=20260607';
+import { dateMx, num, num0, money } from '../util/format.js?v=20260607';
+import { estadoSCBadge } from './subcontratos.js?v=20260607';
 import {
   exportLicitanteXlsxCompras, exportLicitantePdfCompras,
   parseLicitanteXlsxCompras,
   exportComparativaXlsxCompras, exportComparativaPdfCompras
-} from '../services/subcontrato-export.js?v=20260606';
+} from '../services/subcontrato-export.js?v=20260607';
 
 // Helpers tolerantes al shape del catálogo unificado.
 // El catálogo en /shared/catalogos/{obraId}/conceptos usa snake_case
@@ -850,7 +850,16 @@ function licColumnHeader(obraId, scId, licId, lic, total, totalCat, esAdj, edita
       lic.aceptaSinIva !== false
         ? h('span', { style: { color: 'var(--ok)' } }, 'sin IVA')
         : h('span', { style: { color: 'var(--warn)' } }, '+ IVA'),
-      esDestajo && h('span', { style: { color: 'var(--warn)', fontWeight: '600' } }, '· DESTAJO')
+      editable
+        ? h('button', {
+          class: 'btn ghost',
+          style: { padding: '0 5px', fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: esDestajo ? 'var(--warn)' : 'var(--text-2)', fontWeight: esDestajo ? '700' : '400' },
+          title: esDestajo
+            ? 'Destajo (solo MO): el comparativo suma el material SOGRUB del alcance. Clic para cambiar a Subcontrato completo.'
+            : 'Subcontrato completo (su P.U. ya incluye material). Clic para marcar Destajo (solo MO) y que se sume el material SOGRUB del alcance.',
+          onClick: (e) => { e.stopPropagation(); onToggleTipoLicitante(obraId, scId, licId, lic); }
+        }, esDestajo ? '· DESTAJO' : '· subcontrato')
+        : (esDestajo && h('span', { style: { color: 'var(--warn)', fontWeight: '600' } }, '· DESTAJO'))
     ]),
     h('div', { style: { fontSize: '11px', fontWeight: '600', color: 'var(--text-0)', marginTop: '2px' } }, money(total)),
     esDestajo && total > 0 && h('div', {
@@ -1207,6 +1216,21 @@ async function onQuitarLicitante(obraId, scId, licId, lic) {
       return true;
     }
   });
+}
+
+// Cambia el tipo del licitante Subcontrato ⇄ Destajo. En destajo, el comparativo
+// suma el material SOGRUB del alcance al precio de mano de obra (comparación justa).
+async function onToggleTipoLicitante(obraId, scId, licId, lic) {
+  const nuevo = lic.tipoSubcontratacion === 'destajo' ? 'subcontrato' : 'destajo';
+  try {
+    await updateSubcontratoLicitante(obraId, scId, licId, { tipoSubcontratacion: nuevo });
+    toast(nuevo === 'destajo'
+      ? 'Marcado como Destajo: el comparativo suma el material SOGRUB del alcance'
+      : 'Marcado como Subcontrato completo', 'ok');
+    navigate(`/obras/${obraId}/subcontratos/${scId}?tab=licitantes`);
+  } catch (err) {
+    toast('Error al cambiar el tipo: ' + err.message, 'danger');
+  }
 }
 
 // ====================== TAB: ADJUDICACIÓN ======================

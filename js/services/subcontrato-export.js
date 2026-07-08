@@ -39,10 +39,10 @@ function money(n) {
 }
 function fmtPct(n) {
   if (!Number.isFinite(n)) return '—';
-  // Ahorro positivo = se muestra en plano (ej. "12.6%"); sobrecosto con '-'.
-  // Solo ASCII: la fuente del PDF no tiene el signo menos Unicode (U+2212).
-  const v = n * 100;
-  return (v < 0 ? '-' : '') + Math.abs(v).toFixed(1) + '%';
+  // Convención de la app (igual que la pantalla): ahorro (n>0) se muestra como
+  // "-X%" (X% menos) y el sobrecosto (n<0) como "+X%". Solo ASCII: la fuente
+  // del PDF no tiene el signo menos Unicode (U+2212), que salía como basura.
+  return (n >= 0 ? '-' : '+') + Math.abs(n * 100).toFixed(1) + '%';
 }
 function setNumFmt(ws, r, c, fmt) {
   const ref = XLSX.utils.encode_cell({ r, c });
@@ -462,9 +462,13 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
   drawHeader(doc, obra, `COMPARATIVA — ${meta.nombre || 'Subcontrato'}`);
 
-  // Solo mostramos columna "Mat. SOGRUB" si hay al menos un destajista
-  // (si no, esa columna está siempre vacía y solo estorba).
+  // Mostramos la columna "Mat. SOGRUB" (costo del material que pone SOGRUB,
+  // capturado en el Alcance) siempre que haya material capturado o algún
+  // destajista, para que el alcance quede representado igual que en pantalla.
+  // El material solo se SUMA al comparable de los destajistas (que cotizan MO).
   const hayDestajo = lics.some(l => l.tipoSubcontratacion === 'destajo');
+  const hayMaterial = conceptosSub.some(cs => Number(cs.costoMaterialSogrub) > 0);
+  const mostrarMat = hayMaterial || hayDestajo;
 
   let totalCat = 0;
   const totales = lics.map(() => 0);
@@ -492,7 +496,7 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
 
     const row = [cat.clave || '', cat.descripcion || '', cat.unidad || '',
       num2(cant), money(puCat), money(impCat)];
-    if (hayDestajo) {
+    if (mostrarMat) {
       // Mostramos el mat. SOGRUB del concepto. Vacío si 0 para no saturar.
       row.push(matSogrub > 0 ? money(matSogrub) : '—');
     }
@@ -516,7 +520,7 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
 
   // Total row
   const totalRow = ['', '', '', '', 'TOTAL', money(totalCat)];
-  if (hayDestajo) totalRow.push('');
+  if (mostrarMat) totalRow.push('');
   lics.forEach((l, i) => {
     const t = totales[i];
     totalRow.push('', money(t), totalCat > 0 ? fmtPct((totalCat - t) / totalCat) : '—');
@@ -525,13 +529,13 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
 
   // Headers: el grupo "Catálogo" cubre P.U./Importe(/Mat. SOGRUB)
   const head1Cols = ['', '', '', '', '', 'Catálogo'];
-  if (hayDestajo) head1Cols.push('Mat. SOGRUB');
+  if (mostrarMat) head1Cols.push('Mat. SOGRUB');
   for (const l of lics) {
     const tipo = l.tipoSubcontratacion === 'destajo' ? '(D + mat)' : '';
     head1Cols.push(`${l.nombre || ''} ${tipo}`, '', '');
   }
   const head2Cols = ['Clave', 'Descripción', 'U.', 'Cant.', 'P.U.', 'Importe'];
-  if (hayDestajo) head2Cols.push('P.U.');
+  if (mostrarMat) head2Cols.push('Mat.');
   for (let i = 0; i < lics.length; i++) head2Cols.push('P.U.', 'Importe', 'Ahorro %');
 
   const columnStyles = {
@@ -542,7 +546,7 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
     4: { halign: 'right', cellWidth: 48 },
     5: { halign: 'right', cellWidth: 55 }
   };
-  if (hayDestajo) {
+  if (mostrarMat) {
     columnStyles[6] = { halign: 'right', cellWidth: 50, fillColor: [255, 250, 230] };
   }
 
