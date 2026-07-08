@@ -1,10 +1,10 @@
-import { h, toast, modal } from '../util/dom.js?v=20260607';
-import { renderShell } from './shell.js?v=20260607';
-import { state } from '../state/store.js?v=20260607';
+import { h, toast, modal } from '../util/dom.js?v=20260608';
+import { renderShell } from './shell.js?v=20260608';
+import { state } from '../state/store.js?v=20260608';
 import {
   listProveedoresGlobal, addProveedorGlobal,
   updateProveedorGlobal, deleteProveedorGlobal
-} from '../services/db.js?v=20260607';
+} from '../services/db.js?v=20260608';
 
 // CRUD de proveedores globales. Almacenado en /legacy/bitacora/sogrub_proveedores
 // como array (compatible con appsogrub). MVP: una sola lista global; la

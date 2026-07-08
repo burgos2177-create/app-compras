@@ -510,7 +510,9 @@ export function exportComparativaPdfCompras(obra, sub, conceptosAll) {
       const isBest = valid && bestComp != null && Math.abs(comp - bestComp) < 0.01;
       if (isBest) mejores[i]++;
 
-      row.push(valid ? money(p) : '—');
+      // P.U. comparable (destajo = MO + material SOGRUB por unidad), para que
+      // P.U. × Cantidad = Importe. El material por unidad se ve en su columna.
+      row.push(valid ? money(comp) : '—');
       row.push(valid ? money(imp) : '—');
       const ahorroPct = valid && puCat > 0 ? (puCat - comp) / puCat : null;
       row.push(ahorroPct != null ? fmtPct(ahorroPct) : '—');
