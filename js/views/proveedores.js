@@ -1,14 +1,32 @@
-import { h, toast, modal } from '../util/dom.js?v=20260608';
-import { renderShell } from './shell.js?v=20260608';
-import { state } from '../state/store.js?v=20260608';
+import { h, toast, modal } from '../util/dom.js?v=20260609';
+import { renderShell } from './shell.js?v=20260609';
+import { state } from '../state/store.js?v=20260609';
 import {
   listProveedoresGlobal, addProveedorGlobal,
   updateProveedorGlobal, deleteProveedorGlobal
-} from '../services/db.js?v=20260608';
+} from '../services/db.js?v=20260609';
 
 // CRUD de proveedores globales. Almacenado en /legacy/bitacora/sogrub_proveedores
 // como array (compatible con appsogrub). MVP: una sola lista global; la
 // asignación por obra (sogrub_proy_proveedores) se construye después.
+
+const CLASIFICACIONES = ['Materiales', 'Servicios', 'Subcontratista', 'Equipo / Renta', 'Fletes', 'Otro'];
+const MEDIOS_PAGO = ['Transferencia', 'Cheque', 'Efectivo', 'Tarjeta', 'Otro'];
+// Documentos anti-lavado (PLD) que se solicitan a cada proveedor.
+const DOC_TIPOS = [
+  { key: 'constanciaFiscal', label: 'Constancia de situación fiscal' },
+  { key: 'caratulaBancaria', label: 'Carátula bancaria (RFC visible)' },
+  { key: 'opinionSat', label: 'D-32 Opinión positiva SAT' }
+];
+
+function docsCount(p) {
+  return DOC_TIPOS.filter(d => p.documentos?.[d.key]?.url).length;
+}
+function docsBadge(p) {
+  const n = docsCount(p);
+  const color = n === 3 ? 'var(--ok)' : n === 0 ? 'var(--text-2)' : 'var(--warn)';
+  return h('span', { style: { color, fontWeight: '600', fontSize: '12px' } }, `${n}/3`);
+}
 
 export async function renderProveedores() {
   renderShell([{ label: 'Proveedores' }], h('div', { class: 'empty' }, 'Cargando…'));
@@ -35,9 +53,10 @@ export async function renderProveedores() {
         h('thead', {}, [h('tr', {}, [
           h('th', {}, 'Nombre'),
           h('th', {}, 'RFC'),
+          h('th', {}, 'Clasificación'),
+          h('th', {}, 'Pago'),
           h('th', {}, 'Teléfono'),
-          h('th', {}, 'Email'),
-          h('th', {}, 'Notas'),
+          h('th', {}, 'Docs AML'),
           h('th', {}, '')
         ])]),
         h('tbody', {}, sorted.map(p => provRow(p)))
@@ -58,9 +77,10 @@ function provRow(p) {
   return h('tr', {}, [
     h('td', {}, h('b', {}, p.nombre)),
     h('td', { class: 'mono muted', style: { fontSize: '12px' } }, p.rfc || '—'),
+    h('td', { class: 'muted', style: { fontSize: '12px' } }, p.clasificacion || '—'),
+    h('td', { class: 'muted', style: { fontSize: '12px' } }, p.medioPago || '—'),
     h('td', { class: 'muted' }, p.telefono || '—'),
-    h('td', { class: 'muted' }, p.email || '—'),
-    h('td', { class: 'muted', style: { fontSize: '12px', maxWidth: '300px' } }, (p.notas || '').slice(0, 80) || '—'),
+    h('td', {}, docsBadge(p)),
     h('td', {}, h('div', { class: 'row', style: { gap: '4px' } }, [
       h('button', { class: 'btn sm ghost', onClick: () => editDialog(p) }, '✎'),
       h('button', { class: 'btn sm danger', onClick: () => onDelete(p) }, '🗑')
@@ -75,6 +95,19 @@ async function editDialog(prov) {
   const email    = h('input', { type: 'email', value: prov?.email || '' });
   const notas    = h('textarea', { rows: 3, placeholder: 'Familias que maneja, condiciones de pago default, etc.' }, prov?.notas || '');
 
+  const clasificacion = h('select', {}, [
+    h('option', { value: '' }, '— clasificación —'),
+    ...CLASIFICACIONES.map(c => h('option', { value: c, selected: (prov?.clasificacion || '') === c }, c))
+  ]);
+  const clabe = h('input', {
+    value: prov?.clabe || '', placeholder: '18 dígitos', inputmode: 'numeric', maxlength: 18,
+    style: { fontFamily: 'var(--mono)' }
+  });
+  const medioPago = h('select', {}, [
+    h('option', { value: '' }, '— medio de pago —'),
+    ...MEDIOS_PAGO.map(c => h('option', { value: c, selected: (prov?.medioPago || '') === c }, c))
+  ]);
+
   await modal({
     title: prov ? 'Editar proveedor' : 'Nuevo proveedor',
     body: h('div', {}, [
@@ -84,17 +117,30 @@ async function editDialog(prov) {
         h('div', { class: 'field' }, [h('label', {}, 'Teléfono'), telefono])
       ]),
       h('div', { class: 'field' }, [h('label', {}, 'Email'), email]),
+      h('h2', { style: { fontSize: '13px', margin: '14px 0 6px', color: 'var(--text-1)' } }, 'Pago y clasificación'),
+      h('div', { class: 'grid-2' }, [
+        h('div', { class: 'field' }, [h('label', {}, 'Clasificación'), clasificacion]),
+        h('div', { class: 'field' }, [h('label', {}, 'Medio de pago usual'), medioPago])
+      ]),
+      h('div', { class: 'field' }, [h('label', {}, 'CLABE interbancaria'), clabe]),
       h('div', { class: 'field' }, [h('label', {}, 'Notas'), notas])
     ]),
     confirmLabel: prov ? 'Guardar' : 'Crear',
     onConfirm: async () => {
       const n = nombre.value.trim();
       if (!n) { toast('Captura el nombre', 'danger'); return false; }
+      const clabeDigits = clabe.value.replace(/\D/g, '').slice(0, 18);
+      if (clabeDigits && clabeDigits.length !== 18) {
+        toast('La CLABE debe tener 18 dígitos', 'warn');
+      }
       const data = {
         nombre: n,
         rfc: rfc.value.trim(),
         telefono: telefono.value.trim(),
         email: email.value.trim(),
+        clasificacion: clasificacion.value,
+        clabe: clabeDigits,
+        medioPago: medioPago.value,
         notas: notas.value.trim()
       };
       try {

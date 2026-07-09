@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260608';
-import { renderShell } from './shell.js?v=20260608';
-import { state, setState } from '../state/store.js?v=20260608';
+import { h, toast, modal } from '../util/dom.js?v=20260609';
+import { renderShell } from './shell.js?v=20260609';
+import { state, setState } from '../state/store.js?v=20260609';
 import {
   getObraMetaLegacy,
   loadCatalogoMateriales,
@@ -9,10 +9,10 @@ import {
   setPrecioCatalogo, removePrecioCatalogo,
   listProveedoresGlobal, mergeProveedorObraConGlobal,
   listSolicitudesCotizacion
-} from '../services/db.js?v=20260608';
-import { navigate } from '../state/router.js?v=20260608';
-import { dateMx, num, num0, money } from '../util/format.js?v=20260608';
-import { exportCatalogoComparativaPdf, exportCatalogoComparativaXlsx, exportMaterialesOpusXlsx } from '../services/subcontrato-export.js?v=20260608';
+} from '../services/db.js?v=20260609';
+import { navigate } from '../state/router.js?v=20260609';
+import { dateMx, num, num0, money } from '../util/format.js?v=20260609';
+import { exportCatalogoComparativaPdf, exportCatalogoComparativaXlsx, exportMaterialesOpusXlsx } from '../services/subcontrato-export.js?v=20260609';
 
 // Catálogo de precios pre-cotización. Tabla materiales × proveedores donde
 // el comprador captura proactivamente precios. Sirve para tener una base

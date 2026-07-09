@@ -1,9 +1,9 @@
-import { h } from '../util/dom.js?v=20260608';
-import { renderShell } from './shell.js?v=20260608';
-import { state, setState } from '../state/store.js?v=20260608';
-import { getObraMetaLegacy, listOC, listBuzon, filtrarBuzon } from '../services/db.js?v=20260608';
-import { navigate } from '../state/router.js?v=20260608';
-import { dateMx, num0, money, ocFolio } from '../util/format.js?v=20260608';
+import { h } from '../util/dom.js?v=20260609';
+import { renderShell } from './shell.js?v=20260609';
+import { state, setState } from '../state/store.js?v=20260609';
+import { getObraMetaLegacy, listOC, listBuzon, filtrarBuzon } from '../services/db.js?v=20260609';
+import { navigate } from '../state/router.js?v=20260609';
+import { dateMx, num0, money, ocFolio } from '../util/format.js?v=20260609';
 
 // Lista de OC por obra con tabs por estado.
 

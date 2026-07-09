@@ -1,8 +1,8 @@
 import {
   ref, get, set, update, push, remove, onValue, off
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js';
-import { db } from './firebase.js?v=20260608';
-import { APP_BASE_PATH } from '../config/firebase-config.js?v=20260608';
+import { db } from './firebase.js?v=20260609';
+import { APP_BASE_PATH } from '../config/firebase-config.js?v=20260609';
 
 // Prefija toda path relativa con APP_BASE_PATH. Para escapes (rutas absolutas
 // como /legacy/estimaciones/users, /shared/catalogos, /shared/materiales,
@@ -165,10 +165,13 @@ export async function getProveedor(provId) {
   return list.find(p => p.id === provId) || null;
 }
 
-export async function addProveedorGlobal({ nombre, rfc = '', telefono = '', email = '', notas = '' }) {
+export async function addProveedorGlobal({
+  nombre, rfc = '', telefono = '', email = '', notas = '',
+  clasificacion = '', clabe = '', medioPago = '', documentos = {}
+}) {
   const list = await listProveedoresGlobal();
   const id = crypto.randomUUID();
-  const item = { id, nombre, rfc, telefono, email, notas };
+  const item = { id, nombre, rfc, telefono, email, notas, clasificacion, clabe, medioPago, documentos };
   list.push(item);
   await rset('/legacy/bitacora/sogrub_proveedores', list);
   return item;
