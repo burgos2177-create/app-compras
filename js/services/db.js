@@ -1,8 +1,8 @@
 import {
   ref, get, set, update, push, remove, onValue, off
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js';
-import { db } from './firebase.js?v=20260609';
-import { APP_BASE_PATH } from '../config/firebase-config.js?v=20260609';
+import { db } from './firebase.js?v=20260610';
+import { APP_BASE_PATH } from '../config/firebase-config.js?v=20260610';
 
 // Prefija toda path relativa con APP_BASE_PATH. Para escapes (rutas absolutas
 // como /legacy/estimaciones/users, /shared/catalogos, /shared/materiales,
@@ -158,6 +158,15 @@ export function filtrarBuzon(buzon, { tipo, obraId, estado, estadosIn } = {}) {
 export async function listProveedoresGlobal() {
   const raw = await rread('/legacy/bitacora/sogrub_proveedores');
   return Array.isArray(raw) ? raw : [];
+}
+
+// Endpoint del Apps Script que sube documentos de proveedor a Google Drive.
+// Vive en /shared/compras/config/driveEndpoint (lo configura un admin en la app).
+export async function getDriveEndpoint() {
+  return (await rread('config/driveEndpoint')) || '';
+}
+export async function setDriveEndpoint(url) {
+  return rset('config/driveEndpoint', (url || '').trim());
 }
 
 export async function getProveedor(provId) {

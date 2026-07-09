@@ -1,10 +1,12 @@
-import { h, toast, modal } from '../util/dom.js?v=20260609';
-import { renderShell } from './shell.js?v=20260609';
-import { state } from '../state/store.js?v=20260609';
+import { h, toast, modal } from '../util/dom.js?v=20260610';
+import { renderShell } from './shell.js?v=20260610';
+import { state } from '../state/store.js?v=20260610';
 import {
   listProveedoresGlobal, addProveedorGlobal,
-  updateProveedorGlobal, deleteProveedorGlobal
-} from '../services/db.js?v=20260609';
+  updateProveedorGlobal, deleteProveedorGlobal,
+  getDriveEndpoint, setDriveEndpoint
+} from '../services/db.js?v=20260610';
+import { uploadProveedorDoc } from '../services/drive.js?v=20260610';
 
 // CRUD de proveedores globales. Almacenado en /legacy/bitacora/sogrub_proveedores
 // como array (compatible con appsogrub). MVP: una sola lista global; la
@@ -30,13 +32,28 @@ function docsBadge(p) {
 
 export async function renderProveedores() {
   renderShell([{ label: 'Proveedores' }], h('div', { class: 'empty' }, 'Cargando…'));
-  const list = await listProveedoresGlobal();
+  const [list, driveEndpoint] = await Promise.all([listProveedoresGlobal(), getDriveEndpoint()]);
+  const isAdmin = state.user?.role === 'admin';
 
   const head = h('div', { class: 'row' }, [
     h('h1', {}, 'Proveedores'),
     h('div', { style: { flex: 1 } }),
-    h('button', { class: 'btn primary', onClick: () => editDialog(null) }, '+ Nuevo proveedor')
+    isAdmin && h('button', {
+      class: 'btn ghost',
+      title: driveEndpoint ? 'Drive configurado — clic para cambiar el endpoint' : 'Configura el endpoint de Google Drive para subir documentos',
+      onClick: () => configDriveDialog(driveEndpoint)
+    }, driveEndpoint ? '⚙ Drive ✓' : '⚙ Configurar Drive'),
+    h('button', { class: 'btn primary', onClick: () => editDialog(null, driveEndpoint) }, '+ Nuevo proveedor')
   ]);
+
+  const driveWarn = !driveEndpoint && h('div', {
+    style: {
+      padding: '10px 14px', marginBottom: '10px', fontSize: '12px',
+      background: 'rgba(245, 196, 81, 0.08)', border: '1px solid rgba(245, 196, 81, 0.35)', borderRadius: '6px'
+    }
+  }, isAdmin
+    ? 'Para subir los documentos anti-lavado a Google Drive, configura el endpoint con el botón "⚙ Configurar Drive".'
+    : 'La subida de documentos a Drive aún no está configurada. Pídele a un administrador que la active.');
 
   let body;
   if (list.length === 0) {
@@ -59,7 +76,7 @@ export async function renderProveedores() {
           h('th', {}, 'Docs AML'),
           h('th', {}, '')
         ])]),
-        h('tbody', {}, sorted.map(p => provRow(p)))
+        h('tbody', {}, sorted.map(p => provRow(p, driveEndpoint)))
       ])
     ]);
   }
@@ -70,10 +87,10 @@ export async function renderProveedores() {
   renderShell([
     { label: 'Obras', to: '/' },
     { label: 'Proveedores' }
-  ], h('div', {}, [head, body, footnote]));
+  ], h('div', {}, [head, driveWarn, body, footnote]));
 }
 
-function provRow(p) {
+function provRow(p, driveEndpoint) {
   return h('tr', {}, [
     h('td', {}, h('b', {}, p.nombre)),
     h('td', { class: 'mono muted', style: { fontSize: '12px' } }, p.rfc || '—'),
@@ -82,13 +99,92 @@ function provRow(p) {
     h('td', { class: 'muted' }, p.telefono || '—'),
     h('td', {}, docsBadge(p)),
     h('td', {}, h('div', { class: 'row', style: { gap: '4px' } }, [
-      h('button', { class: 'btn sm ghost', onClick: () => editDialog(p) }, '✎'),
+      h('button', { class: 'btn sm ghost', onClick: () => editDialog(p, driveEndpoint) }, '✎'),
       h('button', { class: 'btn sm danger', onClick: () => onDelete(p) }, '🗑')
     ]))
   ]);
 }
 
-async function editDialog(prov) {
+// Configura (admin) la URL del Apps Script que sube documentos a Drive.
+async function configDriveDialog(current) {
+  const url = h('input', { value: current || '', placeholder: 'https://script.google.com/macros/.../exec' });
+  await modal({
+    title: 'Endpoint de Google Drive',
+    body: h('div', {}, [
+      h('p', { class: 'muted', style: { fontSize: '12px' } },
+        'Pega la URL de la app web del Apps Script (proveedores.sogrubgc@gmail.com). Ver apps-script/proveedores-drive.gs para desplegarlo.'),
+      h('div', { class: 'field' }, [h('label', {}, 'URL (/exec)'), url])
+    ]),
+    confirmLabel: 'Guardar',
+    onConfirm: async () => {
+      const v = url.value.trim();
+      if (v && !/^https:\/\/script\.google\.com\/.*\/exec$/.test(v)) {
+        toast('La URL debe ser de script.google.com y terminar en /exec', 'danger');
+        return false;
+      }
+      try {
+        await setDriveEndpoint(v);
+        toast('Endpoint guardado', 'ok');
+        renderProveedores();
+        return true;
+      } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+    }
+  });
+}
+
+// Fila de un documento AML dentro del editor de proveedor: estado + subir/reemplazar.
+function docRow(prov, d, getClasificacion, driveEndpoint) {
+  const statusEl = h('span', { style: { fontSize: '12px' } });
+  const fileInput = h('input', { type: 'file', accept: '.pdf,.jpg,.jpeg,.png', style: { display: 'none' } });
+  const btn = h('button', { class: 'btn sm ghost', type: 'button' }, 'Subir');
+
+  function refresh() {
+    statusEl.innerHTML = '';
+    const cur = prov.documentos?.[d.key];
+    if (cur?.url) {
+      statusEl.appendChild(h('a', { href: cur.url, target: '_blank', style: { color: 'var(--ok)' } },
+        '✓ ' + (cur.name || 'ver en Drive').slice(0, 40)));
+      btn.textContent = 'Reemplazar';
+    } else {
+      statusEl.appendChild(h('span', { class: 'muted' }, 'pendiente'));
+      btn.textContent = 'Subir';
+    }
+  }
+  refresh();
+
+  btn.addEventListener('click', () => {
+    if (!driveEndpoint) { toast('Configura primero el endpoint de Drive (⚙ Drive)', 'danger'); return; }
+    if (!getClasificacion()) { toast('Elige la clasificación del proveedor antes de subir', 'warn'); return; }
+    fileInput.click();
+  });
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    btn.disabled = true; btn.textContent = 'Subiendo…';
+    try {
+      const res = await uploadProveedorDoc({
+        endpoint: driveEndpoint, clasificacion: getClasificacion(),
+        proveedor: prov.nombre, proveedorId: prov.id, tipo: d.key, tipoLabel: d.label, file
+      });
+      const documentos = { ...(prov.documentos || {}), [d.key]: { url: res.url, fileId: res.fileId, name: res.name, uploadedAt: Date.now() } };
+      await updateProveedorGlobal(prov.id, { documentos });
+      prov.documentos = documentos;
+      toast(`${d.label}: subido`, 'ok');
+    } catch (err) {
+      toast('Error al subir: ' + err.message, 'danger');
+    } finally {
+      btn.disabled = false; fileInput.value = ''; refresh();
+    }
+  });
+
+  return h('div', { class: 'row', style: { gap: '10px', padding: '6px 0', borderBottom: '1px solid var(--border)', alignItems: 'center' } }, [
+    h('div', { style: { flex: 1, fontSize: '13px' } }, d.label),
+    statusEl,
+    btn, fileInput
+  ]);
+}
+
+async function editDialog(prov, driveEndpoint) {
   const nombre   = h('input', { value: prov?.nombre || '', autofocus: true });
   const rfc      = h('input', { value: prov?.rfc || '', placeholder: 'RFC (opcional)' });
   const telefono = h('input', { value: prov?.telefono || '' });
@@ -108,6 +204,19 @@ async function editDialog(prov) {
     ...MEDIOS_PAGO.map(c => h('option', { value: c, selected: (prov?.medioPago || '') === c }, c))
   ]);
 
+  // Documentos anti-lavado: solo para proveedores ya guardados (necesitan id).
+  const docsSection = prov
+    ? h('div', {}, [
+      h('h2', { style: { fontSize: '13px', margin: '14px 0 6px', color: 'var(--text-1)' } }, 'Documentos (PLD / anti-lavado)'),
+      h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '4px' } },
+        driveEndpoint
+          ? 'Se guardan en Drive: Proveedores SOGRUB / <clasificación> / <proveedor>. Deben ir a nombre del mismo RFC.'
+          : 'Configura el endpoint de Drive (⚙ Drive) para habilitar la subida.'),
+      ...DOC_TIPOS.map(d => docRow(prov, d, () => clasificacion.value, driveEndpoint))
+    ])
+    : h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '10px' } },
+      'Guarda el proveedor para poder subir sus documentos anti-lavado.');
+
   await modal({
     title: prov ? 'Editar proveedor' : 'Nuevo proveedor',
     body: h('div', {}, [
@@ -123,7 +232,8 @@ async function editDialog(prov) {
         h('div', { class: 'field' }, [h('label', {}, 'Medio de pago usual'), medioPago])
       ]),
       h('div', { class: 'field' }, [h('label', {}, 'CLABE interbancaria'), clabe]),
-      h('div', { class: 'field' }, [h('label', {}, 'Notas'), notas])
+      h('div', { class: 'field' }, [h('label', {}, 'Notas'), notas]),
+      docsSection
     ]),
     confirmLabel: prov ? 'Guardar' : 'Crear',
     onConfirm: async () => {
