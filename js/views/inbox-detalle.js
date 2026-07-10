@@ -1,16 +1,16 @@
-import { h, toast, modal } from '../util/dom.js?v=20260613';
-import { renderShell } from './shell.js?v=20260613';
-import { state, setState } from '../state/store.js?v=20260613';
+import { h, toast, modal } from '../util/dom.js?v=20260614';
+import { renderShell } from './shell.js?v=20260614';
+import { state, setState } from '../state/store.js?v=20260614';
 import {
   getObraMetaLegacy, getBuzonItem, updateBuzonItem,
   getRequisicionMateriales,
   loadCatalogoConceptos, loadCatalogoMateriales,
   listOC, calcularCoberturaReq,
   buildPreciosPorProveedorObra, analizarReqVsProveedores
-} from '../services/db.js?v=20260613';
-import { navigate } from '../state/router.js?v=20260613';
-import { dateMx, num, num0, reqFolio } from '../util/format.js?v=20260613';
-import { estadoBuzonBadge } from './inbox.js?v=20260613';
+} from '../services/db.js?v=20260614';
+import { navigate } from '../state/router.js?v=20260614';
+import { dateMx, num, num0, reqFolio } from '../util/format.js?v=20260614';
+import { estadoBuzonBadge } from './inbox.js?v=20260614';
 
 // Detalle de una requisición que llegó al inbox de compras (item del buzón
 // con tipo='requisicion_materiales'). Acciones del comprador:

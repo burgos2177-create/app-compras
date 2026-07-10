@@ -1,12 +1,12 @@
-import { h, toast, modal } from '../util/dom.js?v=20260613';
-import { renderShell } from './shell.js?v=20260613';
-import { state } from '../state/store.js?v=20260613';
+import { h, toast, modal } from '../util/dom.js?v=20260614';
+import { renderShell } from './shell.js?v=20260614';
+import { state } from '../state/store.js?v=20260614';
 import {
   listProveedoresGlobal, addProveedorGlobal,
   updateProveedorGlobal, deleteProveedorGlobal,
   getGoogleClientId, setGoogleClientId
-} from '../services/db.js?v=20260613';
-import { uploadProveedorDoc, gisReady } from '../services/drive.js?v=20260613';
+} from '../services/db.js?v=20260614';
+import { uploadProveedorDoc, gisReady } from '../services/drive.js?v=20260614';
 
 // Los navegadores envoltorio (Ferdium/Electron) no completan el popup de OAuth:
 // el token nunca vuelve. Avisamos para que suban desde Chrome/Edge real.
@@ -76,19 +76,49 @@ export async function renderProveedores() {
     ]);
   } else {
     const sorted = [...list].sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
-    body = h('div', { class: 'card', style: { padding: 0 } }, [
-      h('table', { class: 'tbl' }, [
-        h('thead', {}, [h('tr', {}, [
-          h('th', {}, 'Nombre'),
-          h('th', {}, 'RFC'),
-          h('th', {}, 'Clasificación'),
-          h('th', {}, 'Pago'),
-          h('th', {}, 'Teléfono'),
-          h('th', {}, 'Docs AML'),
-          h('th', {}, '')
-        ])]),
-        h('tbody', {}, sorted.map(p => provRow(p, clientId)))
-      ])
+
+    const search = h('input', {
+      type: 'search',
+      placeholder: 'Buscar por nombre, RFC o clasificación…',
+      style: { width: '320px', marginBottom: '10px' }
+    });
+    const tbody = h('tbody', {});
+    const info = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '8px' } });
+
+    function fill() {
+      const q = search.value.trim().toLowerCase();
+      const rows = q
+        ? sorted.filter(p => `${p.nombre || ''} ${p.rfc || ''} ${p.clasificacion || ''} ${p.medioPago || ''}`.toLowerCase().includes(q))
+        : sorted;
+      tbody.innerHTML = '';
+      rows.forEach(p => tbody.appendChild(provRow(p, clientId)));
+      if (rows.length === 0) {
+        tbody.appendChild(h('tr', {}, h('td', {
+          colSpan: 7, class: 'muted', style: { textAlign: 'center', padding: '16px', fontSize: '12px' }
+        }, 'Sin coincidencias')));
+      }
+      info.textContent = `${rows.length} de ${sorted.length} proveedores`;
+    }
+    search.addEventListener('input', fill);
+    fill();
+
+    body = h('div', {}, [
+      search,
+      h('div', { class: 'card', style: { padding: 0 } }, [
+        h('table', { class: 'tbl' }, [
+          h('thead', {}, [h('tr', {}, [
+            h('th', {}, 'Nombre'),
+            h('th', {}, 'RFC'),
+            h('th', {}, 'Clasificación'),
+            h('th', {}, 'Pago'),
+            h('th', {}, 'Teléfono'),
+            h('th', {}, 'Docs AML'),
+            h('th', {}, '')
+          ])]),
+          tbody
+        ])
+      ]),
+      info
     ]);
   }
 
@@ -128,7 +158,7 @@ async function configDriveDialog(current) {
     testBtn.disabled = true; testOut.textContent = 'Abriendo Google…'; testOut.style.color = 'var(--text-2)';
     try {
       // Fuerza el popup para validar client_id + orígenes autorizados.
-      const { requestAccessTokenTest } = await import('../services/drive.js?v=20260613');
+      const { requestAccessTokenTest } = await import('../services/drive.js?v=20260614');
       await requestAccessTokenTest(v);
       testOut.textContent = '✓ Acceso concedido'; testOut.style.color = 'var(--ok)';
     } catch (err) {
