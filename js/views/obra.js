@@ -1,14 +1,14 @@
-import { h } from '../util/dom.js?v=20260616';
-import { renderShell } from './shell.js?v=20260616';
-import { state, setState } from '../state/store.js?v=20260616';
+import { h } from '../util/dom.js?v=20260617';
+import { renderShell } from './shell.js?v=20260617';
+import { state, setState } from '../state/store.js?v=20260617';
 import {
   getObraMetaLegacy, listBuzon, filtrarBuzon,
   listCotizaciones, listOC,
   loadCatalogoConceptos, loadCatalogoMateriales,
   listProveedoresObra, listSubcontratos
-} from '../services/db.js?v=20260616';
-import { navigate } from '../state/router.js?v=20260616';
-import { num0, money } from '../util/format.js?v=20260616';
+} from '../services/db.js?v=20260617';
+import { navigate } from '../state/router.js?v=20260617';
+import { num0, money } from '../util/format.js?v=20260617';
 
 export async function renderObra({ params }) {
   const obraId = params.id;
@@ -92,6 +92,10 @@ export async function renderObra({ params }) {
       numOC, `· ${money(totalOC)}`,
       `/obras/${obraId}/oc`,
       'OC emitidas y enviadas a contabilidad.'),
+    tileCard('🧰 Compra de servicio',
+      '→', 'concepto',
+      `/obras/${obraId}/compra-servicio`,
+      'Renta/servicio/concepto (no material). Compras lo crea y emite OC directo a contabilidad.'),
     tileCard('🔧 Subcontratos',
       numSubcontratos, `${numSubAdjudicados} adjudicado${numSubAdjudicados === 1 ? '' : 's'}`,
       `/obras/${obraId}/subcontratos`,
