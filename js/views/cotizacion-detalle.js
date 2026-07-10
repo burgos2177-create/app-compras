@@ -1,21 +1,21 @@
-import { h, toast, modal } from '../util/dom.js?v=20260620';
-import { renderShell } from './shell.js?v=20260620';
-import { state, setState } from '../state/store.js?v=20260620';
+import { h, toast, modal } from '../util/dom.js?v=20260621';
+import { renderShell } from './shell.js?v=20260621';
+import { state, setState } from '../state/store.js?v=20260621';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
   listProveedoresGlobal, listProveedoresObra,
   getBuzonItem, updateBuzonItem,
   getCotizacion, createCotizacion, updateCotizacion, listCotizaciones,
-  createOC, updateOC, listOC,
+  createOC, getOC, updateOC, listOC,
   pushBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq,
   buildPreciosPorProveedorObra
-} from '../services/db.js?v=20260620';
-import { navigate } from '../state/router.js?v=20260620';
-import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260620';
-import { deriveTotales } from '../services/totales.js?v=20260620';
-import { estadoCotBadge } from './cotizaciones.js?v=20260620';
+} from '../services/db.js?v=20260621';
+import { navigate } from '../state/router.js?v=20260621';
+import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260621';
+import { deriveTotales } from '../services/totales.js?v=20260621';
+import { estadoCotBadge } from './cotizaciones.js?v=20260621';
 
 // Captura/edita una cotización contra una requisición aprobada y emite la OC.
 //
@@ -589,6 +589,8 @@ async function emitirOCFromCotizacion(ctx, totales) {
     autor
   };
   const ocId = await createOC(obraId, ocPayload);
+  const ocNumero = (await getOC(obraId, ocId))?.numero || 0;
+  const folioOC = ocFolio(ocNumero);
 
   // 2. Desglose por concepto OPUS para bitácora
   const desglose = Object.values(cot.items)
@@ -605,9 +607,12 @@ async function emitirOCFromCotizacion(ctx, totales) {
   // 3. Push al buzón
   const buzonItem = {
     tipo: 'oc_materiales',
+    claseCompra: 'material',
     origenApp: 'compras',
     obraId,
     ocId,
+    ocNumero,
+    ocFolio: folioOC,
     proveedor: cot.proveedor,
     reqIds: cot.reqIds || [],
     fechaEmision: ocPayload.fechaEmision,

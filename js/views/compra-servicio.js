@@ -1,14 +1,14 @@
-import { h, toast, modal } from '../util/dom.js?v=20260620';
-import { renderShell } from './shell.js?v=20260620';
-import { state, setState } from '../state/store.js?v=20260620';
+import { h, toast, modal } from '../util/dom.js?v=20260621';
+import { renderShell } from './shell.js?v=20260621';
+import { state, setState } from '../state/store.js?v=20260621';
 import {
   getObraMetaLegacy, loadCatalogoConceptos,
   listProveedoresObra, listProveedoresGlobal, mergeProveedorObraConGlobal,
-  createOC, updateOC, pushBuzonItem
-} from '../services/db.js?v=20260620';
-import { navigate } from '../state/router.js?v=20260620';
-import { money, num0 } from '../util/format.js?v=20260620';
-import { deriveTotales } from '../services/totales.js?v=20260620';
+  createOC, getOC, updateOC, pushBuzonItem
+} from '../services/db.js?v=20260621';
+import { navigate } from '../state/router.js?v=20260621';
+import { money, num0, ocFolio } from '../util/format.js?v=20260621';
+import { deriveTotales } from '../services/totales.js?v=20260621';
 
 // Compra de CONCEPTO / SERVICIO originada en compras (sin requisición de
 // materiales). Ej: renta de baño portátil. Compras la crea y cotiza directo,
@@ -272,11 +272,13 @@ export async function renderCompraServicio({ params }) {
         estado: 'enviada_buzon', autor
       };
       const ocId = await createOC(obraId, ocPayload);
+      const ocNumero = (await getOC(obraId, ocId))?.numero || 0;
+      const folioOC = ocFolio(ocNumero);
 
       // 2) Buzón (contrato de contabilidad)
       const buzonItem = {
         tipo: 'oc_materiales', claseCompra: 'servicio', origenApp: 'compras',
-        obraId, ocId, proveedor, reqIds: [],
+        obraId, ocId, ocNumero, ocFolio: folioOC, proveedor, reqIds: [],
         fechaEmision: ocPayload.fechaEmision, condicionesPago: ocPayload.condicionesPago,
         categoria, ...(indirectoAmbito ? { indirectoAmbito } : {}),
         items: itemsArr,

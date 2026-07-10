@@ -1,18 +1,51 @@
-import { h, toast, modal } from '../util/dom.js?v=20260620';
-import { renderShell } from './shell.js?v=20260620';
-import { state, setState } from '../state/store.js?v=20260620';
+import { h, toast, modal } from '../util/dom.js?v=20260621';
+import { renderShell } from './shell.js?v=20260621';
+import { state, setState } from '../state/store.js?v=20260621';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
   getOC, getBuzonItem, cancelarOC, updateOC,
   getFacturacion, setFacturacion
-} from '../services/db.js?v=20260620';
-import { navigate } from '../state/router.js?v=20260620';
-import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260620';
-import { estadoOCBadge } from './oc.js?v=20260620';
-import { exportOcPdf, exportOcDoc, usoCfdiEfectivo } from '../services/oc-export.js?v=20260620';
+} from '../services/db.js?v=20260621';
+import { navigate } from '../state/router.js?v=20260621';
+import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260621';
+import { estadoOCBadge } from './oc.js?v=20260621';
+import { exportOcPdf, exportOcDoc, usoCfdiEfectivo } from '../services/oc-export.js?v=20260621';
 
 const ESTADOS_CANCELABLES = new Set(['borrador', 'enviada_buzon', 'aprobada', 'rechazada', 'huerfana']);
+
+// Catálogo SAT c_UsoCFDI (los relevantes para una persona moral que compra).
+const USOS_CFDI = [
+  ['G01', 'Adquisición de mercancías'],
+  ['G02', 'Devoluciones, descuentos o bonificaciones'],
+  ['G03', 'Gastos en general'],
+  ['I01', 'Construcciones'],
+  ['I02', 'Mobiliario y equipo de oficina por inversiones'],
+  ['I03', 'Equipo de transporte'],
+  ['I04', 'Equipo de cómputo y accesorios'],
+  ['I05', 'Dados, troqueles, moldes, matrices y herramental'],
+  ['I06', 'Comunicaciones telefónicas'],
+  ['I07', 'Comunicaciones satelitales'],
+  ['I08', 'Otra maquinaria y equipo'],
+  ['S01', 'Sin efectos fiscales'],
+  ['CP01', 'Pagos']
+];
+
+// Select del uso CFDI. Guarda el valor como "CLAVE Descripción" (ej. "G03 Gastos
+// en general") para que la leyenda lo muestre tal cual. Conserva un valor manual
+// previo que no esté en el catálogo.
+function usoCfdiSelect(current, emptyLabel) {
+  const opts = [h('option', { value: '' }, emptyLabel)];
+  let matched = false;
+  for (const [code, label] of USOS_CFDI) {
+    const val = `${code} ${label}`;
+    const sel = current === val || current === code;
+    if (sel) matched = true;
+    opts.push(h('option', { value: val, selected: sel }, `${code} · ${label}`));
+  }
+  if (current && !matched) opts.splice(1, 0, h('option', { value: current, selected: true }, current + ' (personalizado)'));
+  return h('select', {}, opts);
+}
 
 // Detalle de OC: read-only. Muestra estado de la OC y estado real del item
 // del buzón en bitácora (porque al aprobar/pagar/cerrar contabilidad mueve el
@@ -90,11 +123,12 @@ export async function renderOCDetalle({ params }) {
   // Uso del CFDI por OC: vacío usa el global/default; lo que se ponga aquí solo
   // aplica a esta OC.
   const usoEfectivo = usoCfdiEfectivo(oc, factur);
-  const usoInput = h('input', { value: oc.usoCfdi || '', placeholder: usoEfectivo + '  (global/default)', style: { width: '300px' } });
+  const usoSel = usoCfdiSelect(oc.usoCfdi || '', '— usa el global/default —');
+  usoSel.style.minWidth = '320px';
   const usoBtn = h('button', { class: 'btn sm ghost' }, 'Guardar');
   usoBtn.addEventListener('click', async () => {
     try {
-      await updateOC(obraId, ocId, { usoCfdi: usoInput.value.trim() });
+      await updateOC(obraId, ocId, { usoCfdi: usoSel.value });
       toast('Uso del CFDI actualizado para esta OC', 'ok');
       renderOCDetalle({ params: { id: obraId, ocid: ocId } });
     } catch (err) { toast('Error: ' + err.message, 'danger'); }
@@ -102,7 +136,7 @@ export async function renderOCDetalle({ params }) {
   const usoCard = h('div', { class: 'card' }, [
     h('h3', {}, 'Uso del CFDI (esta OC)'),
     h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, [
-      usoInput, usoBtn,
+      usoSel, usoBtn,
       h('span', { class: 'muted', style: { fontSize: '12px' } }, `Efectivo: ${usoEfectivo}`)
     ]),
     h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
@@ -298,7 +332,7 @@ async function datosFacturaDialog(current, obraId, ocId) {
   const razonSocial = h('input', { value: f.razonSocial || '', placeholder: 'Razón social del receptor' });
   const rfc = h('input', { value: f.rfc || '', placeholder: 'RFC', style: { fontFamily: 'var(--mono)' } });
   const regimen = h('input', { value: f.regimen || '', placeholder: 'Ej. 601 General de Ley Personas Morales' });
-  const usoCfdi = h('input', { value: f.usoCfdi || '', placeholder: 'G03 Gastos en general (default)' });
+  const usoCfdi = usoCfdiSelect(f.usoCfdi || '', '(default: G03 Gastos en general)');
   const correoFacturas = h('input', { value: f.correoFacturas || '', placeholder: 'correo para recibir CFDI' });
   // Domicilio fiscal por campos individuales (antes era un solo campo que se salía)
   const calle = h('input', { value: f.calle || '', placeholder: 'Calle' });

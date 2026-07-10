@@ -1,12 +1,12 @@
-import { h, toast, modal } from '../util/dom.js?v=20260620';
-import { renderShell } from './shell.js?v=20260620';
-import { state, setState } from '../state/store.js?v=20260620';
+import { h, toast, modal } from '../util/dom.js?v=20260621';
+import { renderShell } from './shell.js?v=20260621';
+import { state, setState } from '../state/store.js?v=20260621';
 import {
   getObraMetaLegacy, listCotizaciones, listBuzon, filtrarBuzon,
   deleteCotizacion
-} from '../services/db.js?v=20260620';
-import { navigate } from '../state/router.js?v=20260620';
-import { dateMx, num0, money, reqFolio } from '../util/format.js?v=20260620';
+} from '../services/db.js?v=20260621';
+import { navigate } from '../state/router.js?v=20260621';
+import { dateMx, num0, money, reqFolio } from '../util/format.js?v=20260621';
 
 // Lista de cotizaciones por obra. Cada cotización pertenece a una requisición
 // aprobada (o varias) y a un proveedor. La emisión de OC sale del detalle
