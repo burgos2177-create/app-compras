@@ -1,12 +1,12 @@
-import { h, toast, modal } from '../util/dom.js?v=20260611';
-import { renderShell } from './shell.js?v=20260611';
-import { state } from '../state/store.js?v=20260611';
+import { h, toast, modal } from '../util/dom.js?v=20260612';
+import { renderShell } from './shell.js?v=20260612';
+import { state } from '../state/store.js?v=20260612';
 import {
   listProveedoresGlobal, addProveedorGlobal,
   updateProveedorGlobal, deleteProveedorGlobal,
   getDriveEndpoint, setDriveEndpoint
-} from '../services/db.js?v=20260611';
-import { uploadProveedorDoc } from '../services/drive.js?v=20260611';
+} from '../services/db.js?v=20260612';
+import { uploadProveedorDoc } from '../services/drive.js?v=20260612';
 
 // CRUD de proveedores globales. Almacenado en /legacy/bitacora/sogrub_proveedores
 // como array (compatible con appsogrub). MVP: una sola lista global; la
@@ -132,7 +132,7 @@ async function configDriveDialog(current) {
       h('div', { class: 'field' }, [h('label', {}, 'URL (/exec)'), url]),
       h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', marginTop: '4px' } }, [testBtn, testOut]),
       h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } },
-        'Si falla: en Apps Script → Implementar → Gestionar implementaciones, el acceso debe ser "Cualquiera" (no "con cuenta de Google") y usa la URL que termina en /exec.')
+        'El despliegue debe ser tipo "Aplicación web" (NO "Biblioteca"), con acceso "Cualquiera" y ejecutar como "Yo". La URL correcta es /macros/s/…/exec (no /macros/library/…).')
     ]),
     confirmLabel: 'Guardar',
     onConfirm: async () => {
