@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260619';
-import { renderShell } from './shell.js?v=20260619';
-import { state, setState } from '../state/store.js?v=20260619';
+import { h, toast, modal } from '../util/dom.js?v=20260620';
+import { renderShell } from './shell.js?v=20260620';
+import { state, setState } from '../state/store.js?v=20260620';
 import {
   getObraMetaLegacy,
   loadCatalogoMateriales,
@@ -9,9 +9,9 @@ import {
   listSolicitudesCotizacion, getSolicitudCotizacion,
   createSolicitudCotizacion, updateSolicitudCotizacion,
   deleteSolicitudCotizacion
-} from '../services/db.js?v=20260619';
-import { navigate } from '../state/router.js?v=20260619';
-import { dateMx, num0 } from '../util/format.js?v=20260619';
+} from '../services/db.js?v=20260620';
+import { navigate } from '../state/router.js?v=20260620';
+import { dateMx, num0 } from '../util/format.js?v=20260620';
 
 // Generador de listas de "solicitud de cotización" para mandar rápido a una
 // casa de materiales. No persiste nada — es un PDF utilitario para obtener

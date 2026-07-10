@@ -1,8 +1,8 @@
-import { h, toast, modal } from '../util/dom.js?v=20260619';
-import { renderShell } from './shell.js?v=20260619';
-import { state } from '../state/store.js?v=20260619';
-import { listUsersLegacy, listObrasLegacy } from '../services/db.js?v=20260619';
-import { createUser, updateUserRole, setUserAssignment } from '../services/auth.js?v=20260619';
+import { h, toast, modal } from '../util/dom.js?v=20260620';
+import { renderShell } from './shell.js?v=20260620';
+import { state } from '../state/store.js?v=20260620';
+import { listUsersLegacy, listObrasLegacy } from '../services/db.js?v=20260620';
+import { createUser, updateUserRole, setUserAssignment } from '../services/auth.js?v=20260620';
 
 const ROLES = ['comprador', 'almacenista', 'ingeniero', 'admin'];
 

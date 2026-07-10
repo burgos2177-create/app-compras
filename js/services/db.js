@@ -1,8 +1,8 @@
 import {
   ref, get, set, update, push, remove, onValue, off
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js';
-import { db } from './firebase.js?v=20260619';
-import { APP_BASE_PATH } from '../config/firebase-config.js?v=20260619';
+import { db } from './firebase.js?v=20260620';
+import { APP_BASE_PATH } from '../config/firebase-config.js?v=20260620';
 
 // Prefija toda path relativa con APP_BASE_PATH. Para escapes (rutas absolutas
 // como /legacy/estimaciones/users, /shared/catalogos, /shared/materiales,

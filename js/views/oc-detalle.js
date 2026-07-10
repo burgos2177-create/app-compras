@@ -1,16 +1,16 @@
-import { h, toast, modal } from '../util/dom.js?v=20260619';
-import { renderShell } from './shell.js?v=20260619';
-import { state, setState } from '../state/store.js?v=20260619';
+import { h, toast, modal } from '../util/dom.js?v=20260620';
+import { renderShell } from './shell.js?v=20260620';
+import { state, setState } from '../state/store.js?v=20260620';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
   getOC, getBuzonItem, cancelarOC, updateOC,
   getFacturacion, setFacturacion
-} from '../services/db.js?v=20260619';
-import { navigate } from '../state/router.js?v=20260619';
-import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260619';
-import { estadoOCBadge } from './oc.js?v=20260619';
-import { exportOcPdf, exportOcDoc } from '../services/oc-export.js?v=20260619';
+} from '../services/db.js?v=20260620';
+import { navigate } from '../state/router.js?v=20260620';
+import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260620';
+import { estadoOCBadge } from './oc.js?v=20260620';
+import { exportOcPdf, exportOcDoc, usoCfdiEfectivo } from '../services/oc-export.js?v=20260620';
 
 const ESTADOS_CANCELABLES = new Set(['borrador', 'enviada_buzon', 'aprobada', 'rechazada', 'huerfana']);
 
@@ -87,6 +87,28 @@ export async function renderOCDetalle({ params }) {
     ])
   ]);
 
+  // Uso del CFDI por OC: vacío usa el global/default; lo que se ponga aquí solo
+  // aplica a esta OC.
+  const usoEfectivo = usoCfdiEfectivo(oc, factur);
+  const usoInput = h('input', { value: oc.usoCfdi || '', placeholder: usoEfectivo + '  (global/default)', style: { width: '300px' } });
+  const usoBtn = h('button', { class: 'btn sm ghost' }, 'Guardar');
+  usoBtn.addEventListener('click', async () => {
+    try {
+      await updateOC(obraId, ocId, { usoCfdi: usoInput.value.trim() });
+      toast('Uso del CFDI actualizado para esta OC', 'ok');
+      renderOCDetalle({ params: { id: obraId, ocid: ocId } });
+    } catch (err) { toast('Error: ' + err.message, 'danger'); }
+  });
+  const usoCard = h('div', { class: 'card' }, [
+    h('h3', {}, 'Uso del CFDI (esta OC)'),
+    h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, [
+      usoInput, usoBtn,
+      h('span', { class: 'muted', style: { fontSize: '12px' } }, `Efectivo: ${usoEfectivo}`)
+    ]),
+    h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
+      'Déjalo vacío para usar el global (default G03 Gastos en general). Lo que pongas aquí solo aplica a esta OC.')
+  ]);
+
   const buzonCard = buzonItem && renderBuzonCard(buzonItem);
 
   const itemsCard = renderItemsCard(oc, materiales, conceptos);
@@ -103,7 +125,7 @@ export async function renderOCDetalle({ params }) {
   ]);
 
   renderShell(crumbs(obraId, meta?.nombre, folio), h('div', {}, [
-    head, datosCard, buzonCard, itemsCard, totalesCard, reqsCard
+    head, datosCard, usoCard, buzonCard, itemsCard, totalesCard, reqsCard
   ]));
 }
 
@@ -276,25 +298,37 @@ async function datosFacturaDialog(current, obraId, ocId) {
   const razonSocial = h('input', { value: f.razonSocial || '', placeholder: 'Razón social del receptor' });
   const rfc = h('input', { value: f.rfc || '', placeholder: 'RFC', style: { fontFamily: 'var(--mono)' } });
   const regimen = h('input', { value: f.regimen || '', placeholder: 'Ej. 601 General de Ley Personas Morales' });
-  const usoCfdi = h('input', { value: f.usoCfdi || '', placeholder: 'Ej. G03 Gastos en general' });
-  const domicilio = h('input', { value: f.domicilio || '', placeholder: 'Domicilio fiscal (opcional)' });
+  const usoCfdi = h('input', { value: f.usoCfdi || '', placeholder: 'G03 Gastos en general (default)' });
   const correoFacturas = h('input', { value: f.correoFacturas || '', placeholder: 'correo para recibir CFDI' });
+  // Domicilio fiscal por campos individuales (antes era un solo campo que se salía)
+  const calle = h('input', { value: f.calle || '', placeholder: 'Calle' });
+  const numExt = h('input', { value: f.numExt || '', placeholder: 'No. ext.' });
+  const numInt = h('input', { value: f.numInt || '', placeholder: 'No. int.' });
+  const colonia = h('input', { value: f.colonia || '', placeholder: 'Colonia' });
+  const cp = h('input', { value: f.cp || '', placeholder: 'C.P.' });
+  const municipio = h('input', { value: f.municipio || '', placeholder: 'Municipio / Alcaldía' });
+  const estado = h('input', { value: f.estado || '', placeholder: 'Estado' });
   const field = (l, el) => h('div', { class: 'field' }, [h('label', {}, l), el]);
   await modal({
     title: 'Datos fiscales de SOGRUB (para pedir factura)',
     body: h('div', {}, [
-      h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Aparecen en la leyenda de "solicitud de factura" del PDF/Word de la OC.'),
+      h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Aparecen en la leyenda de "solicitud de factura" del PDF/Word de la OC. Son globales (aplican a todas las OC).'),
       field('Razón social', razonSocial),
       h('div', { class: 'grid-2' }, [field('RFC', rfc), field('Régimen fiscal', regimen)]),
-      h('div', { class: 'grid-2' }, [field('Uso del CFDI', usoCfdi), field('Correo para facturas', correoFacturas)]),
-      field('Domicilio fiscal', domicilio)
+      h('div', { class: 'grid-2' }, [field('Uso del CFDI (default)', usoCfdi), field('Correo para facturas', correoFacturas)]),
+      h('h2', { style: { fontSize: '13px', margin: '14px 0 6px', color: 'var(--text-1)' } }, 'Domicilio fiscal'),
+      h('div', { class: 'grid-3' }, [field('Calle', calle), field('No. ext.', numExt), field('No. int.', numInt)]),
+      h('div', { class: 'grid-2' }, [field('Colonia', colonia), field('C.P.', cp)]),
+      h('div', { class: 'grid-2' }, [field('Municipio', municipio), field('Estado', estado)])
     ]),
     confirmLabel: 'Guardar',
     onConfirm: async () => {
       try {
         await setFacturacion({
           razonSocial: razonSocial.value.trim(), rfc: rfc.value.trim(), regimen: regimen.value.trim(),
-          usoCfdi: usoCfdi.value.trim(), domicilio: domicilio.value.trim(), correoFacturas: correoFacturas.value.trim()
+          usoCfdi: usoCfdi.value.trim(), correoFacturas: correoFacturas.value.trim(),
+          calle: calle.value.trim(), numExt: numExt.value.trim(), numInt: numInt.value.trim(),
+          colonia: colonia.value.trim(), cp: cp.value.trim(), municipio: municipio.value.trim(), estado: estado.value.trim()
         });
         toast('Datos fiscales guardados (aplican a todas las OC)', 'ok');
         if (obraId && ocId) renderOCDetalle({ params: { id: obraId, ocid: ocId } });

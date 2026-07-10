@@ -122,15 +122,17 @@ export function exportOcPdf(obra, oc, factur = {}) {
 
   // Leyenda de factura
   let ly = Math.max(ty + 10, doc.lastAutoTable.finalY + 14);
-  if (ly > 640) { doc.addPage(); ly = 60; }
+  // Envolvemos cada línea al ancho de la caja para que el domicilio no se salga.
+  doc.setFont('helvetica', 'normal').setFontSize(9);
+  const wrapped = leyendaFactura(factur, folio, oc).flatMap(l => doc.splitTextToSize(l, W - 80 - 24));
+  const boxH = 24 + wrapped.length * 12 + 8;
+  if (ly + boxH > 720) { doc.addPage(); ly = 60; }
   doc.setDrawColor(BRAND.r, BRAND.g, BRAND.b).setFillColor(247, 249, 252);
-  const legendLines = leyendaFactura(factur, folio);
-  const boxH = 24 + legendLines.length * 12 + 8;
   doc.roundedRect(40, ly, W - 80, boxH, 4, 4, 'FD');
   doc.setFont('helvetica', 'bold').setFontSize(9.5).setTextColor(BRAND.r, BRAND.g, BRAND.b);
   doc.text('SOLICITUD DE FACTURA (CFDI)', 52, ly + 17);
   doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(60);
-  doc.text(legendLines, 52, ly + 33);
+  doc.text(wrapped, 52, ly + 33);
   ly += boxH + 40;
 
   // Firma
@@ -146,13 +148,32 @@ export function exportOcPdf(obra, oc, factur = {}) {
   doc.save(`${folio}_${safe(oc.proveedor?.nombre)}.pdf`);
 }
 
-function leyendaFactura(f, folio) {
+// Compone el domicilio fiscal desde los campos individuales (con fallback al
+// campo libre 'domicilio' de configuraciones anteriores).
+function domicilioTexto(f) {
+  if (f.calle || f.cp || f.colonia || f.municipio || f.estado) {
+    let l1 = f.calle || '';
+    if (f.numExt) l1 += ' No. ' + f.numExt;
+    if (f.numInt) l1 += ' Int. ' + f.numInt;
+    return [l1.trim(), f.colonia ? 'Col. ' + f.colonia : '', f.cp ? 'C.P. ' + f.cp : '', f.municipio, f.estado]
+      .filter(Boolean).join(', ');
+  }
+  return f.domicilio || '';
+}
+
+// Uso del CFDI efectivo: el de la OC (si se sobrescribió) → global → default.
+export function usoCfdiEfectivo(oc, f) {
+  return (oc && oc.usoCfdi && String(oc.usoCfdi).trim()) || (f && f.usoCfdi && String(f.usoCfdi).trim()) || 'G03 Gastos en general';
+}
+
+function leyendaFactura(f, folio, oc) {
   const v = (x, ph) => (x && String(x).trim()) ? x : ph;
+  const dom = domicilioTexto(f);
   return [
     'Le agradeceremos emitir su factura (CFDI) con los siguientes datos fiscales:',
     `Razón social: ${v(f.razonSocial, '(configurar)')}    RFC: ${v(f.rfc, '(configurar)')}`,
-    `Régimen fiscal: ${v(f.regimen, '(configurar)')}    Uso del CFDI: ${v(f.usoCfdi, '(configurar)')}`,
-    f.domicilio ? `Domicilio fiscal: ${f.domicilio}` : '',
+    `Régimen fiscal: ${v(f.regimen, '(configurar)')}    Uso del CFDI: ${usoCfdiEfectivo(oc, f)}`,
+    dom ? `Domicilio fiscal: ${dom}` : '',
     `Favor de referir esta orden (${folio}) en el CFDI y enviar PDF y XML a: ${v(f.correoFacturas, '(configurar)')}.`,
     'Agradecemos su atención y su servicio.'
   ].filter(Boolean);
@@ -179,7 +200,7 @@ export function exportOcDoc(obra, oc, factur = {}) {
     ...retArr(oc).map(r => [`Ret. ${esc(r.label)}`, '- ' + money(r.importe)])
   ].map(([k, v]) => `<tr><td style="text-align:right;color:#555">${k}</td><td style="text-align:right;width:120px">${v}</td></tr>`).join('');
 
-  const legend = leyendaFactura(factur, folio).map(l => `<div>${esc(l)}</div>`).join('');
+  const legend = leyendaFactura(factur, folio, oc).map(l => `<div>${esc(l)}</div>`).join('');
   const pdatos = [];
   if (oc.proveedor?.rfc) pdatos.push('RFC: ' + esc(oc.proveedor.rfc));
   if (oc.proveedor?.contacto) pdatos.push("At'n: " + esc(oc.proveedor.contacto));
