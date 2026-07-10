@@ -1,16 +1,16 @@
-import { h, toast, modal } from '../util/dom.js?v=20260618';
-import { renderShell } from './shell.js?v=20260618';
-import { state, setState } from '../state/store.js?v=20260618';
+import { h, toast, modal } from '../util/dom.js?v=20260619';
+import { renderShell } from './shell.js?v=20260619';
+import { state, setState } from '../state/store.js?v=20260619';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
   getOC, getBuzonItem, cancelarOC, updateOC,
   getFacturacion, setFacturacion
-} from '../services/db.js?v=20260618';
-import { navigate } from '../state/router.js?v=20260618';
-import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260618';
-import { estadoOCBadge } from './oc.js?v=20260618';
-import { exportOcPdf, exportOcDoc } from '../services/oc-export.js?v=20260618';
+} from '../services/db.js?v=20260619';
+import { navigate } from '../state/router.js?v=20260619';
+import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260619';
+import { estadoOCBadge } from './oc.js?v=20260619';
+import { exportOcPdf, exportOcDoc } from '../services/oc-export.js?v=20260619';
 
 const ESTADOS_CANCELABLES = new Set(['borrador', 'enviada_buzon', 'aprobada', 'rechazada', 'huerfana']);
 
@@ -67,7 +67,7 @@ export async function renderOCDetalle({ params }) {
     h('div', { style: { flex: 1 } }),
     h('button', { class: 'btn ghost', onClick: () => exportOcPdf(obraParaExport, ocParaExport, factur), title: 'Descargar PDF de la OC' }, '⬇ PDF'),
     h('button', { class: 'btn ghost', onClick: () => exportOcDoc(obraParaExport, ocParaExport, factur), title: 'Descargar Word (.doc) editable de la OC' }, '⬇ Word'),
-    isAdmin && h('button', { class: 'btn ghost', onClick: () => datosFacturaDialog(factur), title: 'Datos fiscales de SOGRUB para la leyenda de factura' }, '⚙ Datos factura'),
+    isAdmin && h('button', { class: 'btn ghost', onClick: () => datosFacturaDialog(factur, obraId, ocId), title: 'Datos fiscales de SOGRUB para la leyenda de factura (se guardan globales, aplican a todas las OC)' }, '⚙ Datos factura'),
     ESTADOS_CANCELABLES.has(estadoEfectivo) && h('button', {
       class: 'btn danger',
       onClick: () => onCancelar(obraId, ocId, oc)
@@ -270,7 +270,8 @@ function kv(label, val) {
 }
 
 // Datos fiscales de SOGRUB (receptor) para la leyenda de factura en las OC.
-async function datosFacturaDialog(current) {
+// Se guardan GLOBALES (config/facturacion) y aplican a todas las OC.
+async function datosFacturaDialog(current, obraId, ocId) {
   const f = current || {};
   const razonSocial = h('input', { value: f.razonSocial || '', placeholder: 'Razón social del receptor' });
   const rfc = h('input', { value: f.rfc || '', placeholder: 'RFC', style: { fontFamily: 'var(--mono)' } });
@@ -295,7 +296,8 @@ async function datosFacturaDialog(current) {
           razonSocial: razonSocial.value.trim(), rfc: rfc.value.trim(), regimen: regimen.value.trim(),
           usoCfdi: usoCfdi.value.trim(), domicilio: domicilio.value.trim(), correoFacturas: correoFacturas.value.trim()
         });
-        toast('Datos fiscales guardados', 'ok');
+        toast('Datos fiscales guardados (aplican a todas las OC)', 'ok');
+        if (obraId && ocId) renderOCDetalle({ params: { id: obraId, ocid: ocId } });
         return true;
       } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
     }
