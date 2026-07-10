@@ -1,14 +1,16 @@
-import { h, toast, modal } from '../util/dom.js?v=20260617';
-import { renderShell } from './shell.js?v=20260617';
-import { state, setState } from '../state/store.js?v=20260617';
+import { h, toast, modal } from '../util/dom.js?v=20260618';
+import { renderShell } from './shell.js?v=20260618';
+import { state, setState } from '../state/store.js?v=20260618';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
-  getOC, getBuzonItem, cancelarOC, updateOC
-} from '../services/db.js?v=20260617';
-import { navigate } from '../state/router.js?v=20260617';
-import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260617';
-import { estadoOCBadge } from './oc.js?v=20260617';
+  getOC, getBuzonItem, cancelarOC, updateOC,
+  getFacturacion, setFacturacion
+} from '../services/db.js?v=20260618';
+import { navigate } from '../state/router.js?v=20260618';
+import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260618';
+import { estadoOCBadge } from './oc.js?v=20260618';
+import { exportOcPdf, exportOcDoc } from '../services/oc-export.js?v=20260618';
 
 const ESTADOS_CANCELABLES = new Set(['borrador', 'enviada_buzon', 'aprobada', 'rechazada', 'huerfana']);
 
@@ -23,11 +25,12 @@ export async function renderOCDetalle({ params }) {
   setState({ obraActual: obraId });
   renderShell(crumbs(obraId, '...', ocId), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const [meta, oc, catCon, catMat] = await Promise.all([
+  const [meta, oc, catCon, catMat, factur] = await Promise.all([
     getObraMetaLegacy(obraId),
     getOC(obraId, ocId),
     loadCatalogoConceptos(obraId),
-    loadCatalogoMateriales(obraId)
+    loadCatalogoMateriales(obraId),
+    getFacturacion()
   ]);
   if (!oc) {
     renderShell(crumbs(obraId, meta?.nombre, null),
@@ -55,9 +58,16 @@ export async function renderOCDetalle({ params }) {
 
   const folio = ocFolio(oc.numero);
 
+  const ocParaExport = { ...oc, numero: oc.numero, folio };
+  const obraParaExport = { meta: meta || {} };
+  const isAdmin = state.user?.role === 'admin';
+
   const head = h('div', { class: 'row' }, [
     h('h1', {}, [folio, ' ', estadoOCBadge(estadoEfectivo)]),
     h('div', { style: { flex: 1 } }),
+    h('button', { class: 'btn ghost', onClick: () => exportOcPdf(obraParaExport, ocParaExport, factur), title: 'Descargar PDF de la OC' }, '⬇ PDF'),
+    h('button', { class: 'btn ghost', onClick: () => exportOcDoc(obraParaExport, ocParaExport, factur), title: 'Descargar Word (.doc) editable de la OC' }, '⬇ Word'),
+    isAdmin && h('button', { class: 'btn ghost', onClick: () => datosFacturaDialog(factur), title: 'Datos fiscales de SOGRUB para la leyenda de factura' }, '⚙ Datos factura'),
     ESTADOS_CANCELABLES.has(estadoEfectivo) && h('button', {
       class: 'btn danger',
       onClick: () => onCancelar(obraId, ocId, oc)
@@ -257,6 +267,39 @@ function buzonEstadoBadge(estado) {
 
 function kv(label, val) {
   return h('div', { class: 'field' }, [h('label', {}, label), h('div', {}, val || '—')]);
+}
+
+// Datos fiscales de SOGRUB (receptor) para la leyenda de factura en las OC.
+async function datosFacturaDialog(current) {
+  const f = current || {};
+  const razonSocial = h('input', { value: f.razonSocial || '', placeholder: 'Razón social del receptor' });
+  const rfc = h('input', { value: f.rfc || '', placeholder: 'RFC', style: { fontFamily: 'var(--mono)' } });
+  const regimen = h('input', { value: f.regimen || '', placeholder: 'Ej. 601 General de Ley Personas Morales' });
+  const usoCfdi = h('input', { value: f.usoCfdi || '', placeholder: 'Ej. G03 Gastos en general' });
+  const domicilio = h('input', { value: f.domicilio || '', placeholder: 'Domicilio fiscal (opcional)' });
+  const correoFacturas = h('input', { value: f.correoFacturas || '', placeholder: 'correo para recibir CFDI' });
+  const field = (l, el) => h('div', { class: 'field' }, [h('label', {}, l), el]);
+  await modal({
+    title: 'Datos fiscales de SOGRUB (para pedir factura)',
+    body: h('div', {}, [
+      h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Aparecen en la leyenda de "solicitud de factura" del PDF/Word de la OC.'),
+      field('Razón social', razonSocial),
+      h('div', { class: 'grid-2' }, [field('RFC', rfc), field('Régimen fiscal', regimen)]),
+      h('div', { class: 'grid-2' }, [field('Uso del CFDI', usoCfdi), field('Correo para facturas', correoFacturas)]),
+      field('Domicilio fiscal', domicilio)
+    ]),
+    confirmLabel: 'Guardar',
+    onConfirm: async () => {
+      try {
+        await setFacturacion({
+          razonSocial: razonSocial.value.trim(), rfc: rfc.value.trim(), regimen: regimen.value.trim(),
+          usoCfdi: usoCfdi.value.trim(), domicilio: domicilio.value.trim(), correoFacturas: correoFacturas.value.trim()
+        });
+        toast('Datos fiscales guardados', 'ok');
+        return true;
+      } catch (err) { toast('Error: ' + err.message, 'danger'); return false; }
+    }
+  });
 }
 
 function crumbs(obraId, nombre, folio) {

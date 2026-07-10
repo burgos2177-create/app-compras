@@ -1,8 +1,8 @@
 import {
   ref, get, set, update, push, remove, onValue, off
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js';
-import { db } from './firebase.js?v=20260617';
-import { APP_BASE_PATH } from '../config/firebase-config.js?v=20260617';
+import { db } from './firebase.js?v=20260618';
+import { APP_BASE_PATH } from '../config/firebase-config.js?v=20260618';
 
 // Prefija toda path relativa con APP_BASE_PATH. Para escapes (rutas absolutas
 // como /legacy/estimaciones/users, /shared/catalogos, /shared/materiales,
@@ -167,6 +167,15 @@ export async function getGoogleClientId() {
 }
 export async function setGoogleClientId(id) {
   return rset('config/googleClientId', (id || '').trim());
+}
+
+// Datos fiscales de SOGRUB para la leyenda "solicitud de factura" en las OC.
+// { razonSocial, rfc, regimen, domicilio, usoCfdi, correoFacturas }
+export async function getFacturacion() {
+  return (await rread('config/facturacion')) || {};
+}
+export async function setFacturacion(data) {
+  return rset('config/facturacion', data || {});
 }
 
 export async function getProveedor(provId) {
