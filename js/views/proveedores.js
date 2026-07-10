@@ -1,12 +1,12 @@
-import { h, toast, modal } from '../util/dom.js?v=20260614';
-import { renderShell } from './shell.js?v=20260614';
-import { state } from '../state/store.js?v=20260614';
+import { h, toast, modal } from '../util/dom.js?v=20260615';
+import { renderShell } from './shell.js?v=20260615';
+import { state } from '../state/store.js?v=20260615';
 import {
   listProveedoresGlobal, addProveedorGlobal,
   updateProveedorGlobal, deleteProveedorGlobal,
   getGoogleClientId, setGoogleClientId
-} from '../services/db.js?v=20260614';
-import { uploadProveedorDoc, gisReady } from '../services/drive.js?v=20260614';
+} from '../services/db.js?v=20260615';
+import { uploadProveedorDoc, gisReady } from '../services/drive.js?v=20260615';
 
 // Los navegadores envoltorio (Ferdium/Electron) no completan el popup de OAuth:
 // el token nunca vuelve. Avisamos para que suban desde Chrome/Edge real.
@@ -158,7 +158,7 @@ async function configDriveDialog(current) {
     testBtn.disabled = true; testOut.textContent = 'Abriendo Google…'; testOut.style.color = 'var(--text-2)';
     try {
       // Fuerza el popup para validar client_id + orígenes autorizados.
-      const { requestAccessTokenTest } = await import('../services/drive.js?v=20260614');
+      const { requestAccessTokenTest } = await import('../services/drive.js?v=20260615');
       await requestAccessTokenTest(v);
       testOut.textContent = '✓ Acceso concedido'; testOut.style.color = 'var(--ok)';
     } catch (err) {
@@ -225,10 +225,13 @@ function docRow(prov, d, getClasificacion, clientId) {
       const res = await uploadProveedorDoc({
         clientId, clasificacion: getClasificacion(),
         proveedor: prov.nombre, tipo: d.key, tipoLabel: d.label, file,
-        prevFileId: prov.documentos?.[d.key]?.fileId
+        prevFileId: prov.documentos?.[d.key]?.fileId,
+        folderId: prov.driveFolderId   // reusa la carpeta del proveedor (evita duplicados)
       });
       const documentos = { ...(prov.documentos || {}), [d.key]: { url: res.url, fileId: res.fileId, name: res.name, uploadedAt: Date.now() } };
-      await updateProveedorGlobal(prov.id, { documentos });
+      const patch = { documentos };
+      if (res.folderId && !prov.driveFolderId) { patch.driveFolderId = res.folderId; prov.driveFolderId = res.folderId; }
+      await updateProveedorGlobal(prov.id, patch);
       prov.documentos = documentos;
       toast(`${d.label}: subido`, 'ok');
     } catch (err) {

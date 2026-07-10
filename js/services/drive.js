@@ -118,16 +118,25 @@ export async function requestAccessTokenTest(clientId) {
 }
 
 // Sube (o reemplaza con PATCH si hay prevFileId) un documento del proveedor.
-// Devuelve { url, fileId, name }.
-export async function uploadProveedorDoc({ clientId, clasificacion, proveedor, tipo, tipoLabel, file, prevFileId }) {
+// Devuelve { url, fileId, name, folderId }.
+//
+// folderId: si se pasa (el que ya guardamos del proveedor), se usa DIRECTO sin
+// buscar por nombre. Esto evita carpetas duplicadas: la búsqueda de Drive es
+// eventualmente consistente, así que buscar por nombre justo tras crear puede
+// no encontrar la carpeta y crear otra. Con el id guardado eso no pasa.
+export async function uploadProveedorDoc({ clientId, clasificacion, proveedor, tipo, tipoLabel, file, prevFileId, folderId }) {
   if (!clientId) throw new Error('Falta el Client ID de Google (⚙ Drive)');
   if (!file) throw new Error('No hay archivo');
   if (file.size > MAX_BYTES) throw new Error(`El archivo pesa ${(file.size / 1048576).toFixed(1)} MB (máx. 15 MB)`);
 
-  // Jerarquía: Proveedores SOGRUB / <clasificación> / <proveedor> /
-  const rootId = await getOrCreateFolder(clientId, ROOT_FOLDER, null);
-  const clasId = await getOrCreateFolder(clientId, sanitize(clasificacion || 'Sin clasificacion'), rootId);
-  const provId = await getOrCreateFolder(clientId, sanitize(proveedor), clasId);
+  // Carpeta del proveedor: reusa el id guardado; si no hay, crea la jerarquía
+  // Proveedores SOGRUB / <clasificación> / <proveedor> / y devuelve su id.
+  let provFolderId = folderId;
+  if (!provFolderId) {
+    const rootId = await getOrCreateFolder(clientId, ROOT_FOLDER, null);
+    const clasId = await getOrCreateFolder(clientId, sanitize(clasificacion || 'Sin clasificacion'), rootId);
+    provFolderId = await getOrCreateFolder(clientId, sanitize(proveedor), clasId);
+  }
 
   const name = `${sanitize(tipoLabel)} — ${file.name}`;
   const form = new FormData();
@@ -141,7 +150,7 @@ export async function uploadProveedorDoc({ clientId, clasificacion, proveedor, t
   } else {
     url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink';
     method = 'POST';
-    form.append('metadata', new Blob([JSON.stringify({ name, parents: [provId] })], { type: 'application/json' }));
+    form.append('metadata', new Blob([JSON.stringify({ name, parents: [provFolderId] })], { type: 'application/json' }));
   }
   form.append('file', file);
 
@@ -151,5 +160,5 @@ export async function uploadProveedorDoc({ clientId, clasificacion, proveedor, t
     throw new Error('Drive (subir ' + resp.status + '): ' + txt.slice(0, 140));
   }
   const out = await resp.json();
-  return { url: out.webViewLink, fileId: out.id, name };
+  return { url: out.webViewLink, fileId: out.id, name, folderId: provFolderId };
 }
