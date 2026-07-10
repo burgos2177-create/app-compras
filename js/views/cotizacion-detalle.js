@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260615';
-import { renderShell } from './shell.js?v=20260615';
-import { state, setState } from '../state/store.js?v=20260615';
+import { h, toast, modal } from '../util/dom.js?v=20260616';
+import { renderShell } from './shell.js?v=20260616';
+import { state, setState } from '../state/store.js?v=20260616';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
@@ -11,11 +11,11 @@ import {
   pushBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq,
   buildPreciosPorProveedorObra
-} from '../services/db.js?v=20260615';
-import { navigate } from '../state/router.js?v=20260615';
-import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260615';
-import { deriveTotales } from '../services/totales.js?v=20260615';
-import { estadoCotBadge } from './cotizaciones.js?v=20260615';
+} from '../services/db.js?v=20260616';
+import { navigate } from '../state/router.js?v=20260616';
+import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260616';
+import { deriveTotales } from '../services/totales.js?v=20260616';
+import { estadoCotBadge } from './cotizaciones.js?v=20260616';
 
 // Captura/edita una cotización contra una requisición aprobada y emite la OC.
 //

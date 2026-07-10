@@ -1,12 +1,12 @@
-import { h, toast, modal } from '../util/dom.js?v=20260615';
-import { renderShell } from './shell.js?v=20260615';
-import { state } from '../state/store.js?v=20260615';
+import { h, toast, modal } from '../util/dom.js?v=20260616';
+import { renderShell } from './shell.js?v=20260616';
+import { state } from '../state/store.js?v=20260616';
 import {
   listProveedoresGlobal, addProveedorGlobal,
   updateProveedorGlobal, deleteProveedorGlobal,
   getGoogleClientId, setGoogleClientId
-} from '../services/db.js?v=20260615';
-import { uploadProveedorDoc, gisReady } from '../services/drive.js?v=20260615';
+} from '../services/db.js?v=20260616';
+import { uploadProveedorDoc, gisReady } from '../services/drive.js?v=20260616';
 
 // Los navegadores envoltorio (Ferdium/Electron) no completan el popup de OAuth:
 // el token nunca vuelve. Avisamos para que suban desde Chrome/Edge real.
@@ -158,7 +158,7 @@ async function configDriveDialog(current) {
     testBtn.disabled = true; testOut.textContent = 'Abriendo Google…'; testOut.style.color = 'var(--text-2)';
     try {
       // Fuerza el popup para validar client_id + orígenes autorizados.
-      const { requestAccessTokenTest } = await import('../services/drive.js?v=20260615');
+      const { requestAccessTokenTest } = await import('../services/drive.js?v=20260616');
       await requestAccessTokenTest(v);
       testOut.textContent = '✓ Acceso concedido'; testOut.style.color = 'var(--ok)';
     } catch (err) {
@@ -261,7 +261,21 @@ async function editDialog(prov, clientId) {
   ]);
   const clabe = h('input', {
     value: prov?.clabe || '', placeholder: '18 dígitos', inputmode: 'numeric', maxlength: 18,
-    style: { fontFamily: 'var(--mono)' }
+    style: { fontFamily: 'var(--mono)', flex: 1 }
+  });
+  const copyClabeBtn = h('button', {
+    type: 'button', class: 'btn sm ghost', title: 'Copiar CLABE al portapapeles'
+  }, '📋');
+  copyClabeBtn.addEventListener('click', async () => {
+    const v = clabe.value.trim();
+    if (!v) { toast('No hay CLABE que copiar', 'warn'); return; }
+    try {
+      await navigator.clipboard.writeText(v);
+    } catch {
+      clabe.focus(); clabe.select();
+      try { document.execCommand('copy'); } catch { toast('No se pudo copiar', 'danger'); return; }
+    }
+    toast('CLABE copiada', 'ok');
   });
   const medioPago = h('select', {}, [
     h('option', { value: '' }, '— medio de pago —'),
@@ -295,7 +309,10 @@ async function editDialog(prov, clientId) {
         h('div', { class: 'field' }, [h('label', {}, 'Clasificación'), clasificacion]),
         h('div', { class: 'field' }, [h('label', {}, 'Medio de pago usual'), medioPago])
       ]),
-      h('div', { class: 'field' }, [h('label', {}, 'CLABE interbancaria'), clabe]),
+      h('div', { class: 'field' }, [
+        h('label', {}, 'CLABE interbancaria'),
+        h('div', { class: 'row', style: { gap: '6px', alignItems: 'stretch' } }, [clabe, copyClabeBtn])
+      ]),
       h('div', { class: 'field' }, [h('label', {}, 'Notas'), notas]),
       docsSection
     ]),
