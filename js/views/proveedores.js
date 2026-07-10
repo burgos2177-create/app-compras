@@ -1,12 +1,12 @@
-import { h, toast, modal } from '../util/dom.js?v=20260610';
-import { renderShell } from './shell.js?v=20260610';
-import { state } from '../state/store.js?v=20260610';
+import { h, toast, modal } from '../util/dom.js?v=20260611';
+import { renderShell } from './shell.js?v=20260611';
+import { state } from '../state/store.js?v=20260611';
 import {
   listProveedoresGlobal, addProveedorGlobal,
   updateProveedorGlobal, deleteProveedorGlobal,
   getDriveEndpoint, setDriveEndpoint
-} from '../services/db.js?v=20260610';
-import { uploadProveedorDoc } from '../services/drive.js?v=20260610';
+} from '../services/db.js?v=20260611';
+import { uploadProveedorDoc } from '../services/drive.js?v=20260611';
 
 // CRUD de proveedores globales. Almacenado en /legacy/bitacora/sogrub_proveedores
 // como array (compatible con appsogrub). MVP: una sola lista global; la
@@ -108,12 +108,31 @@ function provRow(p, driveEndpoint) {
 // Configura (admin) la URL del Apps Script que sube documentos a Drive.
 async function configDriveDialog(current) {
   const url = h('input', { value: current || '', placeholder: 'https://script.google.com/macros/.../exec' });
+  const testBtn = h('button', { class: 'btn sm ghost', type: 'button' }, '🔌 Probar conexión');
+  const testOut = h('span', { style: { fontSize: '12px' } });
+  testBtn.addEventListener('click', async () => {
+    const v = url.value.trim();
+    if (!v) { toast('Pega la URL primero', 'warn'); return; }
+    testBtn.disabled = true; testOut.textContent = 'Probando…'; testOut.style.color = 'var(--text-2)';
+    try {
+      const r = await fetch(v, { method: 'GET' });
+      const j = await r.json();
+      if (j?.ok) { testOut.textContent = '✓ Conecta (' + (j.service || 'ok') + ')'; testOut.style.color = 'var(--ok)'; }
+      else { testOut.textContent = 'Respondió sin ok'; testOut.style.color = 'var(--warn)'; }
+    } catch (err) {
+      testOut.textContent = '✕ ' + err.message + ' — el acceso debe ser "Cualquiera" y la URL /exec';
+      testOut.style.color = 'var(--danger)';
+    } finally { testBtn.disabled = false; }
+  });
   await modal({
     title: 'Endpoint de Google Drive',
     body: h('div', {}, [
       h('p', { class: 'muted', style: { fontSize: '12px' } },
         'Pega la URL de la app web del Apps Script (proveedores.sogrubgc@gmail.com). Ver apps-script/proveedores-drive.gs para desplegarlo.'),
-      h('div', { class: 'field' }, [h('label', {}, 'URL (/exec)'), url])
+      h('div', { class: 'field' }, [h('label', {}, 'URL (/exec)'), url]),
+      h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', marginTop: '4px' } }, [testBtn, testOut]),
+      h('p', { class: 'muted', style: { fontSize: '11px', marginTop: '8px' } },
+        'Si falla: en Apps Script → Implementar → Gestionar implementaciones, el acceso debe ser "Cualquiera" (no "con cuenta de Google") y usa la URL que termina en /exec.')
     ]),
     confirmLabel: 'Guardar',
     onConfirm: async () => {

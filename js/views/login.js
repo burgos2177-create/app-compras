@@ -1,5 +1,5 @@
-import { h, mount } from '../util/dom.js?v=20260610';
-import { login } from '../services/auth.js?v=20260610';
+import { h, mount } from '../util/dom.js?v=20260611';
+import { login } from '../services/auth.js?v=20260611';
 
 export function renderLogin() {
   const errBox = h('div', { class: 'err' }, '');
