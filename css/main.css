@@ -178,3 +178,60 @@ input[disabled], select[disabled], textarea[disabled] { opacity: .55; cursor: no
 .req-card .req-folio { font-family: var(--mono); font-size: 13px; color: var(--accent); font-weight: 600; }
 .req-card .req-obra { color: var(--text-1); font-size: 12px; }
 .req-card .req-meta { font-size: 12px; color: var(--text-2); }
+
+/* =====================================================================
+   RESPONSIVE MÓVIL / TABLET
+   Solo aplica en pantallas chicas — el layout de escritorio NO se toca.
+   Todas las vistas se arman con los mismos primitivos (card, grid-*, tbl,
+   row, modal), así que adaptándolos aquí se adapta toda la app.
+   ===================================================================== */
+
+@media (max-width: 768px) {
+  /* Evita el zoom automático de iOS al enfocar campos (font < 16px). */
+  input, select, textarea { font-size: 16px; }
+
+  /* El layout es un grid; sus items traen min-width:auto y se estirarían al
+     ancho de una tabla ancha (desbordando la página). Forzamos min-width:0 para
+     que las tablas se desplacen DENTRO de su tarjeta en vez de ensanchar todo. */
+  .app-layout, .page { min-width: 0; }
+
+  /* Contenido más compacto. */
+  .page { padding: 12px; max-width: 100%; }
+  .page h1 { font-size: 19px; margin-bottom: 12px; }
+  .page h2 { font-size: 15px; margin: 18px 0 10px; }
+  .card { padding: 14px; }
+
+  /* Barra superior: logo + usuario en una fila, migas en su propia línea. */
+  .topbar { flex-wrap: wrap; row-gap: 6px; padding: 8px 12px; gap: 10px; }
+  .topbar .spacer { min-width: 0; }
+  .topbar .crumbs { order: 5; flex-basis: 100%; min-width: 0; font-size: 12px; overflow-x: auto; white-space: nowrap; }
+  .topbar .userchip { padding: 3px 8px; min-width: 0; flex-shrink: 1; }
+  .topbar .userchip .role { display: none; }        /* liberar espacio para "Salir" */
+  .topbar .userchip > span:first-child { max-width: 42vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Cualquier grid (por clase o inline) colapsa a una columna. */
+  .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+  [style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
+
+  /* Tablas anchas: se desplazan horizontalmente DENTRO de su tarjeta, sin
+     empujar el ancho de la página. (:has soportado en navegadores móviles
+     actuales; si no, la tarjeta simplemente no recorta.) */
+  .card:has(table.tbl) { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tbl { font-size: 12px; }
+  .tbl th, .tbl td { padding: 6px 8px; }
+
+  /* Modales a lo ancho de la pantalla. */
+  .modal, .modal.lg, .modal.xl, .modal.full { width: 95vw; padding: 16px; }
+  .modal .actions { flex-wrap: wrap; }
+  .modal .actions .btn { flex: 1; }
+
+  /* Botones cómodos al tap. */
+  .btn { padding: 9px 13px; }
+  .btn.sm { padding: 5px 10px; }
+
+  /* Login a ancho completo. */
+  .login-card { width: 100%; max-width: 400px; padding: 22px; }
+
+  /* Toasts que no se salgan. */
+  .toast-root { left: 12px; right: 12px; bottom: 12px; }
+}

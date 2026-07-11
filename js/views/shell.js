@@ -1,7 +1,7 @@
-import { h, mount } from '../util/dom.js?v=20260711j';
-import { state } from '../state/store.js?v=20260711j';
-import { logout } from '../services/auth.js?v=20260711j';
-import { navigate } from '../state/router.js?v=20260711j';
+import { h, mount } from '../util/dom.js?v=20260711k';
+import { state } from '../state/store.js?v=20260711k';
+import { logout } from '../services/auth.js?v=20260711k';
+import { navigate } from '../state/router.js?v=20260711k';
 
 export function renderShell(crumbs, body) {
   const top = h('header', { class: 'topbar' }, [
