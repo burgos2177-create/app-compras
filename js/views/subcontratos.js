@@ -1,13 +1,13 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711b';
-import { renderShell } from './shell.js?v=20260711b';
-import { state, setState } from '../state/store.js?v=20260711b';
+import { h, toast, modal } from '../util/dom.js?v=20260711c';
+import { renderShell } from './shell.js?v=20260711c';
+import { state, setState } from '../state/store.js?v=20260711c';
 import {
   getObraMetaLegacy, listSubcontratos, createSubcontrato,
   deleteSubcontrato,
   listSubcontratosLegacyCandidatos, migrarSubcontratosLegacy
-} from '../services/db.js?v=20260711b';
-import { navigate } from '../state/router.js?v=20260711b';
-import { dateMx, num0, money } from '../util/format.js?v=20260711b';
+} from '../services/db.js?v=20260711c';
+import { navigate } from '../state/router.js?v=20260711c';
+import { dateMx, num0, money } from '../util/format.js?v=20260711c';
 
 // Lista de subcontratos de la obra. Cada subcontrato cubre conceptos OPUS
 // con un alcance (concepto + cantidad), licitantes con sus precios y, al

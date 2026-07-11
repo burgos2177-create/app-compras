@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711b';
-import { renderShell } from './shell.js?v=20260711b';
-import { state, setState } from '../state/store.js?v=20260711b';
+import { h, toast, modal } from '../util/dom.js?v=20260711c';
+import { renderShell } from './shell.js?v=20260711c';
+import { state, setState } from '../state/store.js?v=20260711c';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
@@ -11,12 +11,13 @@ import {
   pushBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq,
   buildPreciosPorProveedorObra
-} from '../services/db.js?v=20260711b';
-import { navigate } from '../state/router.js?v=20260711b';
-import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711b';
-import { deriveTotales } from '../services/totales.js?v=20260711b';
-import { emitirOC } from '../services/oc-emit.js?v=20260711b';
-import { estadoCotBadge } from './cotizaciones.js?v=20260711b';
+} from '../services/db.js?v=20260711c';
+import { navigate } from '../state/router.js?v=20260711c';
+import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711c';
+import { deriveTotales } from '../services/totales.js?v=20260711c';
+import { emitirOC } from '../services/oc-emit.js?v=20260711c';
+import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711c';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711c';
 
 // Captura/edita una cotización contra una requisición aprobada y emite la OC.
 //
@@ -336,6 +337,11 @@ function renderEditor(ctx) {
   const head = h('div', { class: 'row' }, [
     h('h1', {}, [cotId ? 'Cotización' : 'Nueva cotización', ' ', estadoCotBadge(cot.estado)]),
     h('div', { style: { flex: 1 } }),
+    h('button', {
+      class: 'btn',
+      title: 'Genera un PDF con branding SOGRUB para mandarle al proveedor la lista de materiales a cotizar',
+      onClick: () => onSolicitudPdf(ctx)
+    }, '🖨️ PDF para proveedor'),
     editable && h('button', {
       class: 'btn',
       onClick: () => onSave(ctx, false)
@@ -674,6 +680,59 @@ function renderCoberturaCard(cobertura, materiales) {
 }
 
 // === Acciones ===
+
+// Agrega los items de la cotización a nivel MATERIAL para el documento que se
+// manda al proveedor: el proveedor cotiza por material, no por concepto OPUS,
+// así que sumamos las cantidades de las líneas del mismo material en una sola.
+// Enriquece marca/familia desde el catálogo de materiales para agrupar el PDF.
+export function solicitudItemsFromCot(cot, materiales = {}) {
+  const byMat = new Map();
+  for (const it of Object.values(cot.items || {})) {
+    const key = it.materialKey || ('adhoc:' + (it.clave || '') + ':' + (it.descripcion || ''));
+    const m = materiales[it.materialKey] || {};
+    if (!byMat.has(key)) {
+      byMat.set(key, {
+        clave: it.clave || m.clave || '',
+        descripcion: it.descripcion || m.descripcion || '',
+        unidad: it.unidad || m.unidad || '',
+        marca: m.marca || '',
+        familia: m.familia || '',
+        cantidad: 0,
+        notasItem: it.notas || ''
+      });
+    }
+    byMat.get(key).cantidad += Number(it.cantidad) || 0;
+  }
+  // Cantidad como string (el PDF la imprime tal cual; 0 → vacío)
+  return Array.from(byMat.values()).map(r => ({
+    ...r,
+    cantidad: r.cantidad ? String(Math.round(r.cantidad * 1e6) / 1e6) : ''
+  }));
+}
+
+function onSolicitudPdf(ctx) {
+  const { cot, meta, materiales } = ctx;
+  const items = solicitudItemsFromCot(cot, materiales);
+  if (items.length === 0) { toast('La cotización no tiene materiales', 'danger'); return; }
+  const u = state.user || {};
+  abrirSolicitudPDF({
+    obra: meta || {},
+    destinatario: {
+      nombre: cot.proveedor?.nombre || 'A quien corresponda',
+      rfc: cot.proveedor?.rfc || '',
+      contacto: cot.proveedor?.contacto || '',
+      email: cot.proveedor?.email || '',
+      telefono: cot.proveedor?.telefono || ''
+    },
+    vigenciaDias: cot.vigenciaDias || 15,
+    fechaEntrega: '',
+    notas: '',
+    incluirCantidades: true,
+    autor: { nombre: u.displayName || u.email || '', email: u.email || '' },
+    items,
+    generadoAt: Date.now()
+  });
+}
 
 async function onSave(ctx, marcarRecibida) {
   const { obraId, cotId, cot } = ctx;

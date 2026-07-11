@@ -1,12 +1,12 @@
-import { h, toast } from '../util/dom.js?v=20260711b';
-import { renderShell } from './shell.js?v=20260711b';
-import { state, setState } from '../state/store.js?v=20260711b';
+import { h, toast } from '../util/dom.js?v=20260711c';
+import { renderShell } from './shell.js?v=20260711c';
+import { state, setState } from '../state/store.js?v=20260711c';
 import {
   getObraMetaLegacy, listBuzon, filtrarBuzon,
   loadCatalogoConceptos, loadCatalogoMateriales
-} from '../services/db.js?v=20260711b';
-import { navigate } from '../state/router.js?v=20260711b';
-import { dateMx, num, num0, reqFolio } from '../util/format.js?v=20260711b';
+} from '../services/db.js?v=20260711c';
+import { navigate } from '../state/router.js?v=20260711c';
+import { dateMx, num, num0, reqFolio } from '../util/format.js?v=20260711c';
 
 // Inbox de requisiciones por obra. Lee /shared/buzon filtrado por
 // tipo='requisicion_materiales' y obraId. Muestra estado del item del buzón
