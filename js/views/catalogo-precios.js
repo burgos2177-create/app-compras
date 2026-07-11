@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711c';
-import { renderShell } from './shell.js?v=20260711c';
-import { state, setState } from '../state/store.js?v=20260711c';
+import { h, toast, modal } from '../util/dom.js?v=20260711d';
+import { renderShell } from './shell.js?v=20260711d';
+import { state, setState } from '../state/store.js?v=20260711d';
 import {
   getObraMetaLegacy,
   loadCatalogoMateriales,
@@ -9,10 +9,10 @@ import {
   setPrecioCatalogo, removePrecioCatalogo,
   listProveedoresGlobal, mergeProveedorObraConGlobal,
   listSolicitudesCotizacion
-} from '../services/db.js?v=20260711c';
-import { navigate } from '../state/router.js?v=20260711c';
-import { dateMx, num, num0, money } from '../util/format.js?v=20260711c';
-import { exportCatalogoComparativaPdf, exportCatalogoComparativaXlsx, exportMaterialesOpusXlsx } from '../services/subcontrato-export.js?v=20260711c';
+} from '../services/db.js?v=20260711d';
+import { navigate } from '../state/router.js?v=20260711d';
+import { dateMx, num, num0, money } from '../util/format.js?v=20260711d';
+import { exportCatalogoComparativaPdf, exportCatalogoComparativaXlsx, exportMaterialesOpusXlsx } from '../services/subcontrato-export.js?v=20260711d';
 
 // Catálogo de precios pre-cotización. Tabla materiales × proveedores donde
 // el comprador captura proactivamente precios. Sirve para tener una base

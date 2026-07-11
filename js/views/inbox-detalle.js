@@ -1,18 +1,18 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711c';
-import { renderShell } from './shell.js?v=20260711c';
-import { state, setState } from '../state/store.js?v=20260711c';
+import { h, toast, modal } from '../util/dom.js?v=20260711d';
+import { renderShell } from './shell.js?v=20260711d';
+import { state, setState } from '../state/store.js?v=20260711d';
 import {
   getObraMetaLegacy, getBuzonItem, updateBuzonItem,
   getRequisicionMateriales,
   loadCatalogoConceptos, loadCatalogoMateriales,
   listOC, listCotizaciones, calcularCoberturaReq,
   buildPreciosPorProveedorObra, analizarReqVsProveedores
-} from '../services/db.js?v=20260711c';
-import { emitirOC } from '../services/oc-emit.js?v=20260711c';
-import { navigate } from '../state/router.js?v=20260711c';
-import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260711c';
-import { estadoCotBadge } from './cotizaciones.js?v=20260711c';
-import { estadoBuzonBadge } from './inbox.js?v=20260711c';
+} from '../services/db.js?v=20260711d';
+import { emitirOC } from '../services/oc-emit.js?v=20260711d';
+import { navigate } from '../state/router.js?v=20260711d';
+import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260711d';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711d';
+import { estadoBuzonBadge } from './inbox.js?v=20260711d';
 
 // Detalle de una requisición que llegó al inbox de compras (item del buzón
 // con tipo='requisicion_materiales'). Acciones del comprador:
@@ -221,13 +221,15 @@ function renderComparativaCotizaciones(obraId, buzonId, cotsDeReq, materiales, c
   }
 
   // Estado de selección por material (cotId elegido). Default: mejor precio.
+  // Un costo en 0 significa "no manejan ese material" → NO cuenta como oferta
+  // (no debe ganar como "el más barato").
   const seleccion = {};
   for (const mk of matKeys) {
     let best = null;
-    for (const [cotId, { byMat }] of resumen) {
-      if (['descartada', 'ganadora'].includes(resumen.get(cotId).c.estado)) continue;
+    for (const [cotId, { byMat, c }] of resumen) {
+      if (['descartada', 'ganadora'].includes(c.estado)) continue;
       const q = byMat[mk];
-      if (!q) continue;
+      if (!q || q.precio <= 0) continue;
       if (!best || q.precioSinIva < best.precio) best = { cotId, precio: q.precioSinIva };
     }
     seleccion[mk] = best ? best.cotId : null;
@@ -246,19 +248,19 @@ function renderComparativaCotizaciones(obraId, buzonId, cotsDeReq, materiales, c
     h('tbody', {}, matKeys.map(mk => {
       const m = materiales[mk] || {};
       const restante = cobertura.byMaterial[mk].restante || 0;
-      // mejor precio sin IVA entre candidatas
+      // mejor precio sin IVA entre candidatas (ignorando 0 = no lo manejan)
       let mejor = Infinity;
       for (const [cotId, { byMat, c }] of resumen) {
         if (['descartada', 'ganadora'].includes(c.estado)) continue;
         const q = byMat[mk];
-        if (q && q.precioSinIva < mejor) mejor = q.precioSinIva;
+        if (q && q.precio > 0 && q.precioSinIva < mejor) mejor = q.precioSinIva;
       }
       const selectEl = h('select', { style: { maxWidth: '160px' } });
       let hayOferta = false;
       selectEl.appendChild(h('option', { value: '' }, '— ninguno —'));
       for (const [cotId, c] of candidatas) {
         const q = resumen.get(cotId).byMat[mk];
-        if (!q) continue;
+        if (!q || q.precio <= 0) continue;   // no manejan ese material
         hayOferta = true;
         const opt = h('option', { value: cotId, selected: seleccion[mk] === cotId },
           `${c.proveedor?.nombre || '—'} · ${money(q.precioSinIva)}`);
@@ -275,8 +277,8 @@ function renderComparativaCotizaciones(obraId, buzonId, cotsDeReq, materiales, c
         h('td', { class: 'num' }, num(restante, 2)),
         ...cols.map(([cotId, c]) => {
           const q = resumen.get(cotId).byMat[mk];
-          if (!q) return h('td', { class: 'num muted' }, '—');
-          const esMejor = Math.abs(q.precioSinIva - mejor) < 0.005 && !['descartada', 'ganadora'].includes(c.estado);
+          if (!q || q.precio <= 0) return h('td', { class: 'num muted', title: 'No lo manejan / sin precio' }, '—');
+          const esMejor = mejor !== Infinity && Math.abs(q.precioSinIva - mejor) < 0.005 && !['descartada', 'ganadora'].includes(c.estado);
           return h('td', {
             class: 'num',
             style: {
@@ -332,6 +334,7 @@ async function emitirPorReparto(obraId, buzonId, resumen, seleccion, matKeys) {
     let bruto = 0;
     for (const [itemId, it] of Object.entries(c.items || {})) {
       if (!it.materialKey || !mks.includes(it.materialKey)) continue;
+      if ((Number(it.costoUnitario) || 0) <= 0) continue;   // 0 = no lo manejan, no se compra
       items[itemId] = it;
       bruto += (Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0);
     }
