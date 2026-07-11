@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711';
-import { renderShell } from './shell.js?v=20260711';
-import { state, setState } from '../state/store.js?v=20260711';
+import { h, toast, modal } from '../util/dom.js?v=20260711b';
+import { renderShell } from './shell.js?v=20260711b';
+import { state, setState } from '../state/store.js?v=20260711b';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
@@ -11,11 +11,12 @@ import {
   pushBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq,
   buildPreciosPorProveedorObra
-} from '../services/db.js?v=20260711';
-import { navigate } from '../state/router.js?v=20260711';
-import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711';
-import { deriveTotales } from '../services/totales.js?v=20260711';
-import { estadoCotBadge } from './cotizaciones.js?v=20260711';
+} from '../services/db.js?v=20260711b';
+import { navigate } from '../state/router.js?v=20260711b';
+import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711b';
+import { deriveTotales } from '../services/totales.js?v=20260711b';
+import { emitirOC } from '../services/oc-emit.js?v=20260711b';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711b';
 
 // Captura/edita una cotización contra una requisición aprobada y emite la OC.
 //
@@ -108,8 +109,13 @@ export async function renderCotizacionDetalle({ params, query }) {
       pedidoPorMat[it.materialKey] = (pedidoPorMat[it.materialKey] || 0) + (Number(it.cantidad) || 0);
     }
 
+    // Partir la requisición: si viene ?items=id1,id2 solo se siembran esos
+    // items (para armar cotizaciones distintas con subconjuntos de la req).
+    const itemsFilter = query?.items ? new Set(String(query.items).split(',').filter(Boolean)) : null;
+
     const seedItems = {};
     for (const [reqItemId, it] of Object.entries(reqItem.items || {})) {
+      if (itemsFilter && !itemsFilter.has(reqItemId)) continue;
       const lineaPedida = Number(it.cantidad) || 0;
       const cov = cobertura.byMaterial[it.materialKey];
       let cantidad = lineaPedida;
@@ -722,7 +728,7 @@ async function onEmitirOC(ctx) {
     confirmLabel: 'Emitir', size: 'lg',
     onConfirm: async () => {
       try {
-        await emitirOCFromCotizacion(ctx, totales);
+        await emitirOCFromCotizacion(ctx);
         toast('OC emitida y enviada a contabilidad', 'ok');
         navigate(`/obras/${obraId}/oc`);
         return true;
@@ -735,133 +741,24 @@ async function onEmitirOC(ctx) {
   });
 }
 
-async function emitirOCFromCotizacion(ctx, totales) {
+// Emite la cotización completa como OC (delegando en el emisor compartido).
+async function emitirOCFromCotizacion(ctx) {
   const { obraId, cotId, cot } = ctx;
   const u = state.user;
   const autor = { uid: u.uid, displayName: u.displayName || '', email: u.email || '', app: 'compras' };
-
-  // 1. Crear OC
-  const ocPayload = {
+  return emitirOC(obraId, {
     reqIds: cot.reqIds || [],
-    cotizacionGanadoraId: cotId,
     proveedor: cot.proveedor,
-    fechaEmision: Date.now(),
-    fechaEntregaEstimada: null,
-    condicionesPago: cot.condicionesPago || '',
     items: cot.items,
     incluyeIva: !!cot.incluyeIva,
     ivaPct: cot.ivaPct ?? 0.16,
-    importeBruto: totales.importeBruto,
-    subtotal: totales.subtotal,
-    ivaImporte: totales.ivaImporte,
-    retenciones: totales.retenciones,
-    retencionesTotal: totales.retencionesTotal,
-    total: totales.total,
-    comentariosCompras: cot.comentarios || '',
-    estado: 'enviada_buzon',
-    autor
-  };
-  const ocId = await createOC(obraId, ocPayload);
-  const ocNumero = (await getOC(obraId, ocId))?.numero || 0;
-  const folioOC = ocFolio(ocNumero);
-
-  // 2. Desglose por concepto OPUS para bitácora
-  const desglose = Object.values(cot.items)
-    .filter(it => it.conceptoKey)
-    .map(it => ({
-      conceptoKey: it.conceptoKey,
-      conceptoClave: it.clave || '',
-      conceptoDescripcion: it.descripcion || '',
-      monto: ((Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0)) * (cot.incluyeIva
-        ? 1 / (1 + (cot.ivaPct ?? 0.16))
-        : 1)
-    }));
-
-  // 3. Push al buzón
-  const buzonItem = {
-    tipo: 'oc_materiales',
+    retenciones: cot.retenciones || [],
+    condicionesPago: cot.condicionesPago || '',
+    comentarios: cot.comentarios || '',
+    cotizacionGanadoraId: cotId,
     claseCompra: 'material',
-    origenApp: 'compras',
-    obraId,
-    ocId,
-    ocNumero,
-    ocFolio: folioOC,
-    proveedor: cot.proveedor,
-    reqIds: cot.reqIds || [],
-    fechaEmision: ocPayload.fechaEmision,
-    condicionesPago: ocPayload.condicionesPago,
-    items: Object.values(cot.items).map(it => ({
-      materialKey: it.materialKey,
-      clave: it.clave,
-      descripcion: it.descripcion,
-      unidad: it.unidad,
-      cantidad: it.cantidad,
-      costoUnitario: it.costoUnitario,
-      importe: (Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0),
-      conceptoKey: it.conceptoKey || null,
-      origen: it.origen || 'opus',
-      notas: it.notas || ''
-    })),
-    incluyeIva: !!cot.incluyeIva,
-    ivaPct: cot.ivaPct ?? 0.16,
-    importeBruto: totales.importeBruto,
-    subtotal: totales.subtotal,
-    ivaImporte: totales.ivaImporte,
-    retenciones: totales.retenciones,
-    retencionesTotal: totales.retencionesTotal,
-    total: totales.total,
-    desglose,
-    comentariosCompras: cot.comentarios || '',
-    autor,
-    estado: 'recibido'
-  };
-  const buzonOcId = await pushBuzonItem(buzonItem);
-
-  // 4. Update OC con referencia al buzón
-  await updateOC(obraId, ocId, { buzonId: buzonOcId, enviadaBuzonAt: Date.now() });
-
-  // 5. Marcar la cotización como ganadora
-  await updateCotizacion(obraId, cotId, {
-    estado: 'ganadora',
-    ocId,
-    ocBuzonId: buzonOcId,
-    ganadoraAt: Date.now()
+    autor
   });
-
-  // 6. Para cada req cubierta: agregar la OC a la lista, recalcular cobertura
-  // y solo cerrar si llega a 100%. NO descartamos otras cotizaciones en
-  // estado 'recibida' — pueden ser para los items aún no cubiertos.
-  const ocsActualizadas = await listOC(obraId);
-  for (const reqBuzonId of (cot.reqIds || [])) {
-    const reqItem = await getBuzonItem(reqBuzonId);
-    if (!reqItem) continue;
-
-    const cobertura = calcularCoberturaReq({ ...reqItem, id: reqBuzonId }, ocsActualizadas);
-    const ocBuzonIds = Array.from(new Set([...(reqItem.ocBuzonIds || []), buzonOcId]));
-    const ocIds = Array.from(new Set([...(reqItem.ocIds || []), ocId]));
-
-    const patch = {
-      ocBuzonIds, ocIds,
-      coberturaPct: cobertura.pct,
-      // Compat: mantener ocBuzonId/ocId apuntando al primero (lectores viejos)
-      ocBuzonId: reqItem.ocBuzonId || buzonOcId,
-      ocId: reqItem.ocId || ocId
-    };
-    if (cobertura.completa) {
-      patch.estado = 'cerrado';
-      patch.cerradoAt = Date.now();
-      patch.cerradoPor = autor;
-    }
-    await updateBuzonItem(reqBuzonId, patch);
-
-    if (reqItem.reqId && reqItem.obraId) {
-      await setRequisicionOcRef(reqItem.obraId, reqItem.reqId, {
-        ocBuzonIds, ocIds, coberturaPct: cobertura.pct,
-        ocBuzonId: reqItem.ocBuzonId || buzonOcId,
-        ocId: reqItem.ocId || ocId
-      });
-    }
-  }
 }
 
 // === Helpers ===

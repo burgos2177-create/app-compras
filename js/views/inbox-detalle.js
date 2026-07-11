@@ -1,16 +1,18 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711';
-import { renderShell } from './shell.js?v=20260711';
-import { state, setState } from '../state/store.js?v=20260711';
+import { h, toast, modal } from '../util/dom.js?v=20260711b';
+import { renderShell } from './shell.js?v=20260711b';
+import { state, setState } from '../state/store.js?v=20260711b';
 import {
   getObraMetaLegacy, getBuzonItem, updateBuzonItem,
   getRequisicionMateriales,
   loadCatalogoConceptos, loadCatalogoMateriales,
-  listOC, calcularCoberturaReq,
+  listOC, listCotizaciones, calcularCoberturaReq,
   buildPreciosPorProveedorObra, analizarReqVsProveedores
-} from '../services/db.js?v=20260711';
-import { navigate } from '../state/router.js?v=20260711';
-import { dateMx, num, num0, reqFolio } from '../util/format.js?v=20260711';
-import { estadoBuzonBadge } from './inbox.js?v=20260711';
+} from '../services/db.js?v=20260711b';
+import { emitirOC } from '../services/oc-emit.js?v=20260711b';
+import { navigate } from '../state/router.js?v=20260711b';
+import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260711b';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711b';
+import { estadoBuzonBadge } from './inbox.js?v=20260711b';
 
 // Detalle de una requisición que llegó al inbox de compras (item del buzón
 // con tipo='requisicion_materiales'). Acciones del comprador:
@@ -30,13 +32,14 @@ export async function renderInboxDetalle({ params }) {
   setState({ obraActual: obraId });
   renderShell(crumbsView(obraId, '...', '...'), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const [meta, buzonItem, catCon, catMat, ocs, preciosPorProv] = await Promise.all([
+  const [meta, buzonItem, catCon, catMat, ocs, preciosPorProv, cotizaciones] = await Promise.all([
     getObraMetaLegacy(obraId),
     getBuzonItem(buzonId),
     loadCatalogoConceptos(obraId),
     loadCatalogoMateriales(obraId),
     listOC(obraId),
-    buildPreciosPorProveedorObra(obraId)
+    buildPreciosPorProveedorObra(obraId),
+    listCotizaciones(obraId)
   ]);
   setState({ conceptos: catCon?.conceptos || null, materiales: catMat?.items || null });
 
@@ -91,9 +94,389 @@ export async function renderInboxDetalle({ params }) {
     : null;
   const comparativaCard = analisis ? renderComparativaCard(analisis, materiales, obraId, buzonId) : null;
 
+  // Tablero de cotizaciones REALES capturadas para esta requisición: lista,
+  // comparativa material×proveedor con esas cotizaciones (sirve incluso con
+  // materiales ad-hoc sin precio histórico) y emisión de OC (por reparto o
+  // por cotización completa).
+  const cotsDeReq = Object.entries(cotizaciones || {})
+    .filter(([, c]) => (c.reqIds || []).includes(buzonId))
+    .sort((a, b) => (a[1].createdAt || 0) - (b[1].createdAt || 0));
+  const tableroCard = (buzonItem.estado === 'aprobado')
+    ? renderTableroCotizaciones(obraId, buzonId, buzonItem, cotsDeReq, materiales, conceptos, cobertura)
+    : null;
+
   renderShell(crumbsView(obraId, meta?.nombre, folio), h('div', {}, [
-    head, metaCard, coberturaCard, comparativaCard, itemsCard
+    head, metaCard, coberturaCard, tableroCard, comparativaCard, itemsCard
   ]));
+}
+
+// === Tablero de cotizaciones de la requisición ===
+
+function precioSinIvaCot(c, it) {
+  const p = Number(it.costoUnitario) || 0;
+  return c.incluyeIva ? p / (1 + (c.ivaPct ?? 0.16)) : p;
+}
+
+// Resumen por (cotización × material): precio unitario capturado y cantidad.
+// Toma la primera línea de ese material (todas comparten precio; las líneas
+// se separan solo por concepto para trazabilidad).
+function resumenCotPorMaterial(c) {
+  const byMat = {};
+  for (const it of Object.values(c.items || {})) {
+    if (!it.materialKey) continue;
+    if (!byMat[it.materialKey]) {
+      byMat[it.materialKey] = {
+        precio: Number(it.costoUnitario) || 0,
+        precioSinIva: precioSinIvaCot(c, it),
+        cantidad: 0,
+        clave: it.clave, descripcion: it.descripcion, unidad: it.unidad
+      };
+    }
+    byMat[it.materialKey].cantidad += Number(it.cantidad) || 0;
+  }
+  return byMat;
+}
+
+function renderTableroCotizaciones(obraId, buzonId, buzonItem, cotsDeReq, materiales, conceptos, cobertura) {
+  const nuevaBtn = h('button', {
+    class: 'btn sm primary',
+    onClick: () => nuevaCotizacionDialog(obraId, buzonId, buzonItem, materiales, cobertura)
+  }, '➕ Nueva cotización (elegir items)');
+
+  const head = h('div', { style: { padding: '14px 18px 0', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } }, [
+    h('h3', {}, [
+      '🧾 Cotizaciones de esta requisición ',
+      h('span', { class: 'muted', style: { fontWeight: 'normal', textTransform: 'none' } }, `(${num0(cotsDeReq.length)})`)
+    ]),
+    h('div', { style: { flex: 1 } }),
+    nuevaBtn
+  ]);
+
+  if (cotsDeReq.length === 0) {
+    return h('div', { class: 'card', style: { padding: 0 } }, [
+      head,
+      h('div', { class: 'empty', style: { padding: '18px' } }, [
+        h('div', {}, 'Aún no capturas cotizaciones para esta requisición.'),
+        h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } },
+          'Puedes armar varias: una por proveedor, o partir los items entre distintas. Al juntar 2+ podrás compararlas y emitir la(s) OC desde aquí.')
+      ])
+    ]);
+  }
+
+  // Lista de cotizaciones
+  const lista = h('table', { class: 'tbl' }, [
+    h('thead', {}, [h('tr', {}, [
+      h('th', {}, 'Proveedor'),
+      h('th', {}, 'Estado'),
+      h('th', { class: 'num' }, 'Items'),
+      h('th', { class: 'num' }, 'Total'),
+      h('th', {}, '')
+    ])]),
+    h('tbody', {}, cotsDeReq.map(([cotId, c]) => {
+      const nItems = c.items ? Object.keys(c.items).length : 0;
+      const yaGanadora = c.estado === 'ganadora';
+      return h('tr', {}, [
+        h('td', {}, h('b', {}, c.proveedor?.nombre || '—')),
+        h('td', {}, estadoCotBadge(c.estado)),
+        h('td', { class: 'num' }, num0(nItems)),
+        h('td', { class: 'num' }, money(c.total || 0)),
+        h('td', {}, h('div', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end' } }, [
+          h('button', { class: 'btn sm ghost', onClick: () => navigate(`/obras/${obraId}/cotizaciones/${cotId}`) }, 'Ver'),
+          !yaGanadora && h('button', {
+            class: 'btn sm primary',
+            onClick: () => emitirCotizacionCompleta(obraId, buzonId, cotId, c)
+          }, '↗ Emitir OC completa')
+        ]))
+      ]);
+    }))
+  ]);
+
+  // Comparativa material × proveedor con las cotizaciones capturadas
+  const comparativa = renderComparativaCotizaciones(obraId, buzonId, cotsDeReq, materiales, cobertura);
+
+  return h('div', { class: 'card', style: { padding: 0 } }, [
+    head,
+    h('div', { style: { padding: '10px 0' } }, lista),
+    comparativa
+  ]);
+}
+
+// Matriz: filas = materiales pendientes; columnas = cotizaciones; celda =
+// precio unitario sin IVA capturado. Marca el mejor por material. Debajo, un
+// selector por material (default el mejor) para emitir OC por reparto.
+function renderComparativaCotizaciones(obraId, buzonId, cotsDeReq, materiales, cobertura) {
+  // Cotizaciones candidatas para emitir (no descartadas ni ya ganadoras).
+  const candidatas = cotsDeReq.filter(([, c]) => !['descartada', 'ganadora'].includes(c.estado));
+  const resumen = new Map(); // cotId → { c, byMat }
+  for (const [cotId, c] of cotsDeReq) resumen.set(cotId, { c, byMat: resumenCotPorMaterial(c) });
+
+  // Materiales a comparar: los que aún tienen restante > 0 en la req.
+  const matKeys = Object.keys(cobertura?.byMaterial || {})
+    .filter(mk => (cobertura.byMaterial[mk].restante || 0) > 0);
+
+  if (matKeys.length === 0) {
+    return h('div', { style: { padding: '0 18px 18px' } },
+      h('div', { class: 'muted', style: { fontSize: '12px' } },
+        '✓ No quedan materiales pendientes por cubrir en esta requisición.'));
+  }
+
+  // Estado de selección por material (cotId elegido). Default: mejor precio.
+  const seleccion = {};
+  for (const mk of matKeys) {
+    let best = null;
+    for (const [cotId, { byMat }] of resumen) {
+      if (['descartada', 'ganadora'].includes(resumen.get(cotId).c.estado)) continue;
+      const q = byMat[mk];
+      if (!q) continue;
+      if (!best || q.precioSinIva < best.precio) best = { cotId, precio: q.precioSinIva };
+    }
+    seleccion[mk] = best ? best.cotId : null;
+  }
+
+  const cols = cotsDeReq; // una columna por cotización (en orden)
+
+  const table = h('table', { class: 'tbl' }, [
+    h('thead', {}, [h('tr', {}, [
+      h('th', {}, 'Material'),
+      h('th', { class: 'num' }, 'Restante'),
+      ...cols.map(([, c]) => h('th', { class: 'num', title: c.proveedor?.nombre || '' },
+        (c.proveedor?.nombre || '—').slice(0, 16) + ((c.proveedor?.nombre || '').length > 16 ? '…' : ''))),
+      h('th', {}, 'Asignar a')
+    ])]),
+    h('tbody', {}, matKeys.map(mk => {
+      const m = materiales[mk] || {};
+      const restante = cobertura.byMaterial[mk].restante || 0;
+      // mejor precio sin IVA entre candidatas
+      let mejor = Infinity;
+      for (const [cotId, { byMat, c }] of resumen) {
+        if (['descartada', 'ganadora'].includes(c.estado)) continue;
+        const q = byMat[mk];
+        if (q && q.precioSinIva < mejor) mejor = q.precioSinIva;
+      }
+      const selectEl = h('select', { style: { maxWidth: '160px' } });
+      let hayOferta = false;
+      selectEl.appendChild(h('option', { value: '' }, '— ninguno —'));
+      for (const [cotId, c] of candidatas) {
+        const q = resumen.get(cotId).byMat[mk];
+        if (!q) continue;
+        hayOferta = true;
+        const opt = h('option', { value: cotId, selected: seleccion[mk] === cotId },
+          `${c.proveedor?.nombre || '—'} · ${money(q.precioSinIva)}`);
+        selectEl.appendChild(opt);
+      }
+      selectEl.addEventListener('change', () => { seleccion[mk] = selectEl.value || null; });
+      if (!hayOferta) { selectEl.disabled = true; }
+
+      return h('tr', {}, [
+        h('td', { style: { maxWidth: '260px' } }, [
+          h('div', { class: 'mono', style: { fontSize: '11px', color: 'var(--text-2)' } }, m.clave || mk.slice(0, 10)),
+          h('div', { style: { fontSize: '13px' } }, m.descripcion || '—')
+        ]),
+        h('td', { class: 'num' }, num(restante, 2)),
+        ...cols.map(([cotId, c]) => {
+          const q = resumen.get(cotId).byMat[mk];
+          if (!q) return h('td', { class: 'num muted' }, '—');
+          const esMejor = Math.abs(q.precioSinIva - mejor) < 0.005 && !['descartada', 'ganadora'].includes(c.estado);
+          return h('td', {
+            class: 'num',
+            style: {
+              color: esMejor ? 'var(--ok)' : 'var(--text-0)',
+              fontWeight: esMejor ? '600' : 'normal',
+              background: esMejor ? 'rgba(93, 211, 158, 0.06)' : 'transparent'
+            },
+            title: `${c.incluyeIva ? 'capturado con IVA' : 'sin IVA'} · unit s/IVA ${money(q.precioSinIva)}`
+          }, [money(q.precioSinIva), esMejor && h('span', { style: { fontSize: '10px', marginLeft: '4px' } }, '✓')]);
+        }),
+        h('td', {}, selectEl)
+      ]);
+    }))
+  ]);
+
+  const emitirBtn = h('button', {
+    class: 'btn primary',
+    onClick: () => emitirPorReparto(obraId, buzonId, resumen, seleccion, matKeys)
+  }, '↗ Emitir OC(s) por reparto');
+
+  return h('div', { style: { padding: '4px 0 0' } }, [
+    h('div', { style: { padding: '10px 18px 4px' } },
+      h('h3', { style: { fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-1)' } },
+        'Comparativa y reparto')),
+    h('div', { style: { overflow: 'auto' } }, table),
+    candidatas.length > 0 && h('div', { style: { padding: '12px 18px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, [
+      h('div', { class: 'muted', style: { fontSize: '12px', flex: 1 } },
+        'Elige de qué proveedor comprar cada material (por defecto el más barato). Se emitirá una OC por cada proveedor con los materiales que le asignaste.'),
+      emitirBtn
+    ])
+  ]);
+}
+
+// Emite una OC por cada proveedor según el reparto elegido por material.
+async function emitirPorReparto(obraId, buzonId, resumen, seleccion, matKeys) {
+  // Agrupar materiales por cotización elegida
+  const porCot = {};   // cotId → [mk,...]
+  for (const mk of matKeys) {
+    const cotId = seleccion[mk];
+    if (!cotId) continue;
+    (porCot[cotId] = porCot[cotId] || []).push(mk);
+  }
+  const grupos = Object.entries(porCot);
+  if (grupos.length === 0) {
+    toast('No asignaste ningún material a un proveedor', 'danger');
+    return;
+  }
+
+  // Preparar el resumen para el modal de confirmación
+  const resumenGrupos = grupos.map(([cotId, mks]) => {
+    const { c } = resumen.get(cotId);
+    const items = {};
+    let bruto = 0;
+    for (const [itemId, it] of Object.entries(c.items || {})) {
+      if (!it.materialKey || !mks.includes(it.materialKey)) continue;
+      items[itemId] = it;
+      bruto += (Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0);
+    }
+    return { cotId, c, mks, items, bruto };
+  }).filter(g => Object.keys(g.items).length > 0);
+
+  await modal({
+    title: 'Emitir OC(s) por reparto',
+    size: 'lg',
+    body: h('div', {}, [
+      h('p', {}, `Se emitirán ${resumenGrupos.length} orden${resumenGrupos.length === 1 ? '' : 'es'} de compra:`),
+      h('ul', { style: { margin: '8px 0', paddingLeft: '20px' } },
+        resumenGrupos.map(g => h('li', { style: { marginBottom: '4px' } }, [
+          h('b', {}, g.c.proveedor?.nombre || '—'),
+          h('span', { class: 'muted' }, ` · ${g.mks.length} material${g.mks.length === 1 ? '' : 'es'} · ${money(g.bruto)} (bruto)`)
+        ]))),
+      h('p', { class: 'muted', style: { fontSize: '12px' } },
+        'Cada OC se publica al buzón de contabilidad con su desglose por concepto OPUS. La requisición se cierra sola al llegar al 100%.')
+    ]),
+    confirmLabel: 'Emitir',
+    onConfirm: async () => {
+      try {
+        const u = state.user;
+        const autor = { uid: u.uid, displayName: u.displayName || '', email: u.email || '', app: 'compras' };
+        for (const g of resumenGrupos) {
+          await emitirOC(obraId, {
+            reqIds: [buzonId],
+            proveedor: g.c.proveedor,
+            items: g.items,
+            incluyeIva: !!g.c.incluyeIva,
+            ivaPct: g.c.ivaPct ?? 0.16,
+            retenciones: g.c.retenciones || [],
+            condicionesPago: g.c.condicionesPago || '',
+            comentarios: g.c.comentarios || '',
+            cotizacionGanadoraId: g.cotId,
+            claseCompra: 'material',
+            autor
+          });
+        }
+        toast(`${resumenGrupos.length} OC emitida(s) y enviada(s) a contabilidad`, 'ok');
+        navigate(`/obras/${obraId}/oc`);
+        return true;
+      } catch (err) {
+        console.error('[emitirPorReparto]', err);
+        toast('Error: ' + err.message, 'danger');
+        return false;
+      }
+    }
+  });
+}
+
+// Emite una cotización completa como OC (atajo desde el tablero).
+async function emitirCotizacionCompleta(obraId, buzonId, cotId, c) {
+  if (!c.proveedor?.nombre) { toast('La cotización no tiene proveedor', 'danger'); return; }
+  if (!c.items || Object.keys(c.items).length === 0) { toast('La cotización no tiene items', 'danger'); return; }
+  await modal({
+    title: 'Emitir orden de compra',
+    body: h('div', {}, [
+      h('p', {}, [`Se emitirá una OC al proveedor `, h('b', {}, c.proveedor.nombre),
+        ' por un total de ', h('b', { style: { color: 'var(--accent)' } }, money(c.total || 0)), '.']),
+      h('p', { class: 'muted', style: { fontSize: '12px' } },
+        'Se publica al buzón de contabilidad. La requisición se cierra sola al llegar al 100%.')
+    ]),
+    confirmLabel: 'Emitir', size: 'lg',
+    onConfirm: async () => {
+      try {
+        const u = state.user;
+        const autor = { uid: u.uid, displayName: u.displayName || '', email: u.email || '', app: 'compras' };
+        await emitirOC(obraId, {
+          reqIds: c.reqIds && c.reqIds.length ? c.reqIds : [buzonId],
+          proveedor: c.proveedor,
+          items: c.items,
+          incluyeIva: !!c.incluyeIva,
+          ivaPct: c.ivaPct ?? 0.16,
+          retenciones: c.retenciones || [],
+          condicionesPago: c.condicionesPago || '',
+          comentarios: c.comentarios || '',
+          cotizacionGanadoraId: cotId,
+          claseCompra: 'material',
+          autor
+        });
+        toast('OC emitida y enviada a contabilidad', 'ok');
+        navigate(`/obras/${obraId}/oc`);
+        return true;
+      } catch (err) {
+        console.error('[emitirCotizacionCompleta]', err);
+        toast('Error: ' + err.message, 'danger');
+        return false;
+      }
+    }
+  });
+}
+
+// Modal para crear una cotización eligiendo un subconjunto de items de la req.
+function nuevaCotizacionDialog(obraId, buzonId, buzonItem, materiales, cobertura) {
+  const entries = Object.entries(buzonItem.items || {});
+  // Solo items con restante > 0 (los ya cubiertos no necesitan más cotización).
+  const disponibles = entries.filter(([, it]) => {
+    const cov = cobertura?.byMaterial?.[it.materialKey];
+    return !cov || (cov.restante || 0) > 0;
+  });
+
+  if (disponibles.length === 0) {
+    toast('No quedan items pendientes por cotizar en esta requisición', 'danger');
+    return;
+  }
+
+  const checks = {};
+  const rows = disponibles.map(([itemId, it]) => {
+    const m = materiales[it.materialKey] || {};
+    const cb = h('input', { type: 'checkbox', checked: true });
+    checks[itemId] = cb;
+    return h('label', { class: 'row', style: { gap: '8px', padding: '6px 0', alignItems: 'flex-start', cursor: 'pointer' } }, [
+      cb,
+      h('div', { style: { flex: 1 } }, [
+        h('div', { style: { fontSize: '13px' } }, m.descripcion || it.materialKey),
+        h('div', { class: 'muted', style: { fontSize: '11px' } },
+          `${m.clave || ''} · ${num(it.cantidad, 2)} ${m.unidad || ''}`)
+      ])
+    ]);
+  });
+
+  const selAll = h('button', { class: 'btn sm ghost', type: 'button' }, 'Todos');
+  const selNone = h('button', { class: 'btn sm ghost', type: 'button' }, 'Ninguno');
+  selAll.addEventListener('click', () => Object.values(checks).forEach(c => { c.checked = true; }));
+  selNone.addEventListener('click', () => Object.values(checks).forEach(c => { c.checked = false; }));
+
+  modal({
+    title: 'Nueva cotización — elegir items',
+    body: h('div', {}, [
+      h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '8px' } },
+        'Marca los materiales que va a cotizar este proveedor. Puedes crear otra cotización con los demás.'),
+      h('div', { class: 'row', style: { gap: '6px', marginBottom: '6px' } }, [selAll, selNone]),
+      h('div', { style: { maxHeight: '320px', overflow: 'auto' } }, rows)
+    ]),
+    confirmLabel: 'Continuar',
+    onConfirm: () => {
+      const seleccionados = Object.entries(checks).filter(([, c]) => c.checked).map(([id]) => id);
+      if (seleccionados.length === 0) { toast('Elige al menos un item', 'danger'); return false; }
+      const todos = seleccionados.length === disponibles.length;
+      const itemsParam = todos ? '' : `&items=${seleccionados.join(',')}`;
+      navigate(`/obras/${obraId}/cotizaciones/nueva?req=${buzonId}${itemsParam}`);
+      return true;
+    }
+  });
 }
 
 // === Comparativa de proveedores ===
@@ -101,7 +484,7 @@ export async function renderInboxDetalle({ params }) {
 function renderComparativaCard(an, materiales, obraId, buzonId) {
   if (an.matKeys.length === 0) {
     return h('div', { class: 'card' }, [
-      h('h3', {}, '🔍 Comparativa de proveedores'),
+      h('h3', {}, '🔮 Sugerencia por precios históricos'),
       h('div', { class: 'muted', style: { fontSize: '12px' } },
         'No hay materiales pendientes por cubrir en esta requisición.')
     ]);
@@ -110,7 +493,9 @@ function renderComparativaCard(an, materiales, obraId, buzonId) {
   const sinOfertas = an.matKeys.every(mk => an.porMaterial[mk].ofertas.length === 0);
 
   return h('div', { class: 'card' }, [
-    h('h3', {}, '🔍 Comparativa de proveedores'),
+    h('h3', {}, '🔮 Sugerencia por precios históricos'),
+    h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '-4px', marginBottom: '8px' } },
+      'A quién pedir cotización, según lo que cada proveedor ha cobrado antes (catálogo/cotizaciones/OC previas). Para decidir con las cotizaciones que ya juntaste, usa el tablero de arriba.'),
     sinOfertas
       ? h('div', { class: 'muted', style: { fontSize: '13px', padding: '14px 0' } }, [
         h('div', {}, 'Ningún proveedor de la obra ha cotizado todavía estos materiales.'),
