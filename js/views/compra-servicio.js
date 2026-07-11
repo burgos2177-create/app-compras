@@ -1,14 +1,14 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711i';
-import { renderShell } from './shell.js?v=20260711i';
-import { state, setState } from '../state/store.js?v=20260711i';
+import { h, toast, modal } from '../util/dom.js?v=20260711j';
+import { renderShell } from './shell.js?v=20260711j';
+import { state, setState } from '../state/store.js?v=20260711j';
 import {
   getObraMetaLegacy, loadCatalogoConceptos,
   listProveedoresObra, listProveedoresGlobal, mergeProveedorObraConGlobal,
   createOC, getOC, updateOC, pushBuzonItem
-} from '../services/db.js?v=20260711i';
-import { navigate } from '../state/router.js?v=20260711i';
-import { money, num0, ocFolio } from '../util/format.js?v=20260711i';
-import { deriveTotales } from '../services/totales.js?v=20260711i';
+} from '../services/db.js?v=20260711j';
+import { navigate } from '../state/router.js?v=20260711j';
+import { money, num0, ocFolio } from '../util/format.js?v=20260711j';
+import { deriveTotales } from '../services/totales.js?v=20260711j';
 
 // Compra de CONCEPTO / SERVICIO originada en compras (sin requisición de
 // materiales). Ej: renta de baño portátil. Compras la crea y cotiza directo,

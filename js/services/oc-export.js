@@ -4,7 +4,7 @@
 // Incluye una leyenda amable solicitando la emisión de la factura (CFDI) con los
 // datos fiscales de SOGRUB (configurables en la vista de OC).
 
-import { getLogoDataURL, drawPdfBrandHeader, brandHeaderHTML } from './brand.js?v=20260711i';
+import { getLogoDataURL, drawPdfBrandHeader, brandHeaderHTML } from './brand.js?v=20260711j';
 
 const BRAND = { r: 40, g: 50, b: 65 };
 

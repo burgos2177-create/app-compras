@@ -1,16 +1,17 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711i';
-import { renderShell } from './shell.js?v=20260711i';
-import { state, setState } from '../state/store.js?v=20260711i';
+import { h, toast, modal } from '../util/dom.js?v=20260711j';
+import { renderShell } from './shell.js?v=20260711j';
+import { state, setState } from '../state/store.js?v=20260711j';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
   getOC, getBuzonItem, cancelarOC, updateOC,
-  getFacturacion, setFacturacion
-} from '../services/db.js?v=20260711i';
-import { navigate } from '../state/router.js?v=20260711i';
-import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260711i';
-import { estadoOCBadge } from './oc.js?v=20260711i';
-import { exportOcPdf, exportOcDoc, usoCfdiEfectivo } from '../services/oc-export.js?v=20260711i';
+  getFacturacion, setFacturacion,
+  listProveedoresGlobal
+} from '../services/db.js?v=20260711j';
+import { navigate } from '../state/router.js?v=20260711j';
+import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260711j';
+import { estadoOCBadge } from './oc.js?v=20260711j';
+import { exportOcPdf, exportOcDoc, usoCfdiEfectivo } from '../services/oc-export.js?v=20260711j';
 
 const ESTADOS_CANCELABLES = new Set(['borrador', 'enviada_buzon', 'aprobada', 'rechazada', 'huerfana']);
 
@@ -58,12 +59,13 @@ export async function renderOCDetalle({ params }) {
   setState({ obraActual: obraId });
   renderShell(crumbs(obraId, '...', ocId), h('div', { class: 'empty' }, 'Cargando…'));
 
-  const [meta, oc, catCon, catMat, factur] = await Promise.all([
+  const [meta, oc, catCon, catMat, factur, provsGlobal] = await Promise.all([
     getObraMetaLegacy(obraId),
     getOC(obraId, ocId),
     loadCatalogoConceptos(obraId),
     loadCatalogoMateriales(obraId),
-    getFacturacion()
+    getFacturacion(),
+    listProveedoresGlobal()
   ]);
   if (!oc) {
     renderShell(crumbs(obraId, meta?.nombre, null),
@@ -107,6 +109,10 @@ export async function renderOCDetalle({ params }) {
     }, '✕ Cancelar OC')
   ]);
 
+  // Teléfono del proveedor: usa el snapshot de la OC; si no lo trae, lo busca en
+  // el catálogo global (por id o por nombre). Si no hay en ningún lado → "No registrado".
+  const telProveedor = telefonoProveedor(oc.proveedor, provsGlobal);
+
   const datosCard = h('div', { class: 'card' }, [
     h('h3', {}, 'Datos de la OC'),
     h('div', { class: 'grid-3' }, [
@@ -115,6 +121,7 @@ export async function renderOCDetalle({ params }) {
       kv('Estado', oc.estado),
       kv('Proveedor', oc.proveedor?.nombre),
       kv('RFC', oc.proveedor?.rfc),
+      kv('Teléfono', telProveedor),
       kv('Condiciones de pago', oc.condicionesPago),
       kv('Emite', oc.autor?.displayName || oc.autor?.email)
     ])
@@ -323,6 +330,19 @@ function buzonEstadoBadge(estado) {
 
 function kv(label, val) {
   return h('div', { class: 'field' }, [h('label', {}, label), h('div', {}, val || '—')]);
+}
+
+// Teléfono del proveedor de la OC. Prioriza el snapshot de la OC; si está vacío,
+// lo resuelve del catálogo global (por id, o por nombre en minúsculas). Devuelve
+// 'No registrado' si no hay teléfono en ninguna fuente.
+function telefonoProveedor(prov, provsGlobal) {
+  const snap = (prov?.telefono || '').trim();
+  if (snap) return snap;
+  const lista = Array.isArray(provsGlobal) ? provsGlobal : [];
+  const nombre = (prov?.nombre || '').trim().toLowerCase();
+  const match = lista.find(p => (prov?.id && p.id === prov.id) || (nombre && (p.nombre || '').trim().toLowerCase() === nombre));
+  const tel = (match?.telefono || '').trim();
+  return tel || 'No registrado';
 }
 
 // Datos fiscales de SOGRUB (receptor) para la leyenda de factura en las OC.
