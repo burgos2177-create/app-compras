@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260621';
-import { renderShell } from './shell.js?v=20260621';
-import { state, setState } from '../state/store.js?v=20260621';
+import { h, toast, modal } from '../util/dom.js?v=20260711';
+import { renderShell } from './shell.js?v=20260711';
+import { state, setState } from '../state/store.js?v=20260711';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
@@ -11,11 +11,11 @@ import {
   pushBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq,
   buildPreciosPorProveedorObra
-} from '../services/db.js?v=20260621';
-import { navigate } from '../state/router.js?v=20260621';
-import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260621';
-import { deriveTotales } from '../services/totales.js?v=20260621';
-import { estadoCotBadge } from './cotizaciones.js?v=20260621';
+} from '../services/db.js?v=20260711';
+import { navigate } from '../state/router.js?v=20260711';
+import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711';
+import { deriveTotales } from '../services/totales.js?v=20260711';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711';
 
 // Captura/edita una cotización contra una requisición aprobada y emite la OC.
 //
@@ -97,11 +97,28 @@ export async function renderCotizacionDetalle({ params, query }) {
       }
     }
 
+    // La cobertura es a nivel material, pero la requisición trae una línea por
+    // (material × concepto). Prorrateamos el restante del material entre sus
+    // líneas en proporción a lo pedido en cada concepto — así no se duplica la
+    // cantidad cuando el mismo material aparece en varios conceptos, y la
+    // trazabilidad por concepto se conserva intacta.
+    const pedidoPorMat = {};
+    for (const it of Object.values(reqItem.items || {})) {
+      if (!it.materialKey) continue;
+      pedidoPorMat[it.materialKey] = (pedidoPorMat[it.materialKey] || 0) + (Number(it.cantidad) || 0);
+    }
+
     const seedItems = {};
     for (const [reqItemId, it] of Object.entries(reqItem.items || {})) {
+      const lineaPedida = Number(it.cantidad) || 0;
       const cov = cobertura.byMaterial[it.materialKey];
-      const restante = cov ? cov.restante : (Number(it.cantidad) || 0);
-      if (restante <= 0) continue;
+      let cantidad = lineaPedida;
+      if (cov) {
+        const totalMat = pedidoPorMat[it.materialKey] || lineaPedida;
+        const factor = totalMat > 0 ? cov.restante / totalMat : 0;
+        cantidad = Math.round(lineaPedida * factor * 1e6) / 1e6;
+      }
+      if (cantidad <= 0) continue;
       const m = (catMat?.items || {})[it.materialKey];
       // Precio: si viene hint de proveedor y tiene precio para este material,
       // usar el último precio cotizado por él. Si no, fallback al catálogo OPUS.
@@ -114,7 +131,7 @@ export async function renderCotizacionDetalle({ params, query }) {
         clave: m?.clave || '',
         descripcion: m?.descripcion || '',
         unidad: m?.unidad || '',
-        cantidad: restante,
+        cantidad,
         costoUnitario,
         conceptoKey: it.conceptoKey || null,
         origen: m?.origen || 'opus',
@@ -178,8 +195,19 @@ function renderEditor(ctx) {
   const { obraId, cotId, cot, meta, cobertura, materiales, conceptos, proveedores } = ctx;
 
   // === Refs DOM que se actualizan vía soft-recompute ===
-  const importeCellRefs = {};   // itemId → <td> de la columna Importe
+  // Agrupamos las líneas por material: el mismo material puede venir en varios
+  // conceptos OPUS (una línea por concepto, para la trazabilidad a contabilidad).
+  // Visualmente se colapsa en una sola fila con un único precio; por debajo cada
+  // concepto sigue siendo su propio item de cot.items (nada se pierde).
+  const refs = {
+    itemImporte: {},   // itemId → <td> Importe (filas simples y sub-filas)
+    groupImporte: {},  // groupKey → <td> Importe total del grupo
+    groupCant: {},     // groupKey → <td> Cantidad total del grupo
+    groupMembers: {}   // groupKey → [itemId, ...]
+  };
   const totalesCardRef = { node: null };  // se llena al renderizar
+  const itemsCardRef = { node: null };
+  const expandedGroups = new Set();       // grupos abiertos (persiste entre repintados)
 
   // === Datos card ===
   // Dropdown con optgroups: "Proveedores de esta obra" y "Catálogo global".
@@ -238,14 +266,25 @@ function renderEditor(ctx) {
   }
 
   // === Funciones de soft refresh ===
+  const itemsCtx = { cot, materiales, conceptos, editable };
+
   function softRecomputeTotales() {
-    // Actualiza la celda Importe de cada fila + recrea el contenido de totales
+    // Celda Importe de cada línea (filas simples + sub-filas de grupos).
     for (const [itemId, it] of Object.entries(cot.items)) {
-      const cell = importeCellRefs[itemId];
-      if (cell) {
-        const importe = (Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0);
-        cell.textContent = money(importe);
+      const cell = refs.itemImporte[itemId];
+      if (cell) cell.textContent = money((Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0));
+    }
+    // Totales agregados de cada grupo (suma de sus conceptos).
+    for (const [gk, ids] of Object.entries(refs.groupMembers)) {
+      let cant = 0, imp = 0;
+      for (const id of ids) {
+        const it = cot.items[id];
+        if (!it) continue;
+        const c = Number(it.cantidad) || 0, u = Number(it.costoUnitario) || 0;
+        cant += c; imp += c * u;
       }
+      if (refs.groupCant[gk]) refs.groupCant[gk].textContent = num(cant, 2);
+      if (refs.groupImporte[gk]) refs.groupImporte[gk].textContent = money(imp);
     }
     if (totalesCardRef.node) {
       const fresh = renderTotalesCardContent(cot);
@@ -254,28 +293,38 @@ function renderEditor(ctx) {
     }
   }
 
-  function softRemoveItem(itemId, rowEl) {
-    delete cot.items[itemId];
-    delete importeCellRefs[itemId];
-    if (rowEl && rowEl.parentNode) rowEl.parentNode.removeChild(rowEl);
+  // Alta/baja de items son operaciones poco frecuentes → repintamos el card
+  // completo (más simple y robusto que insertar/quitar filas de un grupo).
+  function rebuildItemsCard() {
+    refs.itemImporte = {}; refs.groupImporte = {}; refs.groupCant = {}; refs.groupMembers = {};
+    const fresh = renderItemsCard(itemsCtx, refs, handlers, expandedGroups);
+    itemsCardRef.node.replaceWith(fresh);
+    itemsCardRef.node = fresh;
     softRecomputeTotales();
+  }
+
+  function softRemoveItem(itemId) {
+    delete cot.items[itemId];
+    rebuildItemsCard();
   }
 
   function softAddItem(item) {
     const id = 'it_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
     cot.items[id] = item;
-    // Reemplazar tabla completa solo si no hay tabla previa, si no insertar fila al final
-    if (itemsTbodyRef.node) {
-      const tr = itemRow(itemsCtx, id, item, softRemoveItem, softRecomputeTotales, importeCellRefs);
-      itemsTbodyRef.node.appendChild(tr);
-    } else {
-      // No había tabla (estaba vacío); repintar el card de items.
-      const fresh = renderItemsCard(itemsCtx, softAddItem, softRemoveItem, softRecomputeTotales, importeCellRefs, itemsTbodyRef);
-      itemsCardRef.node.replaceWith(fresh);
-      itemsCardRef.node = fresh;
-    }
-    softRecomputeTotales();
+    rebuildItemsCard();
   }
+
+  // Handlers que las filas/grupos usan (precio único por material, etc.).
+  const handlers = {
+    recompute: softRecomputeTotales,
+    remove: softRemoveItem,
+    // Un solo precio para todo el material → se propaga a cada concepto.
+    setGroupPrecio: (ids, val) => {
+      for (const id of ids) if (cot.items[id]) cot.items[id].costoUnitario = val;
+      softRecomputeTotales();
+    },
+    addDialog: () => addItemDialog(itemsCtx, softAddItem)
+  };
 
   // === Acciones cabecera ===
   const head = h('div', { class: 'row' }, [
@@ -323,11 +372,7 @@ function renderEditor(ctx) {
     : null;
 
   // === Items card ===
-  const itemsTbodyRef = { node: null };
-  const itemsCardRef = { node: null };
-  const itemsCtx = { cot, materiales, conceptos, editable };
-
-  itemsCardRef.node = renderItemsCard(itemsCtx, softAddItem, softRemoveItem, softRecomputeTotales, importeCellRefs, itemsTbodyRef);
+  itemsCardRef.node = renderItemsCard(itemsCtx, refs, handlers, expandedGroups);
 
   // === Totales card ===
   const totalesCard = h('div', { class: 'card' }, [
@@ -356,9 +401,54 @@ function renderEditor(ctx) {
 }
 
 // === Items table ===
+//
+// Las líneas se agrupan por material. El mismo material puede llegar en varias
+// líneas (una por concepto OPUS) — eso es correcto para la trazabilidad, pero
+// hace ruido visual y obliga a capturar el precio repetido. Aquí colapsamos ese
+// material en UNA fila con un único precio; al capturarlo se propaga a todos sus
+// conceptos. Cada concepto sigue siendo su propio item en cot.items (la
+// trazabilidad a contabilidad no se toca), y se puede desplegar para ver/ajustar
+// la cantidad de cada uno.
 
-function renderItemsCard(ctx, softAddItem, softRemoveItem, softRecomputeTotales, importeCellRefs, tbodyRef) {
-  const { cot, materiales, editable } = ctx;
+function groupItems(entries) {
+  // Clave de agrupación: materialKey del catálogo; para ad-hoc sin materialKey
+  // usamos clave+descripción (los ad-hoc traen materialKey único, así que en la
+  // práctica no se agrupan entre sí).
+  const map = new Map();
+  for (const [id, it] of entries) {
+    const key = it.materialKey || ('adhoc:' + (it.clave || '') + ':' + (it.descripcion || ''));
+    if (!map.has(key)) map.set(key, { key, items: [] });
+    map.get(key).items.push([id, it]);
+  }
+  return [...map.values()];
+}
+
+function matCellContent(it) {
+  return h('div', {}, [
+    it.clave && h('div', { class: 'mono', style: { fontSize: '11px', color: 'var(--text-2)' } }, [
+      it.clave,
+      it.origen === 'ad_hoc_compras' && h('span', { class: 'tag warn', style: { marginLeft: '6px', fontSize: '10px' } }, 'AD-HOC compras'),
+      (it.origen === 'ad_hoc' || it.origen === 'ad_hoc_materiales')
+        ? h('span', { class: 'tag warn', style: { marginLeft: '6px', fontSize: '10px' } }, 'AD-HOC almacén') : null
+    ]),
+    h('div', {}, it.descripcion || '—'),
+    it.notas && h('div', { class: 'muted', style: { fontSize: '11px' } }, it.notas)
+  ]);
+}
+
+function conceptoLabelNode(conceptos, conceptoKey) {
+  const concepto = conceptoKey ? conceptos[conceptoKey] : null;
+  return concepto
+    ? h('span', { title: concepto.descripcion }, [
+      h('span', { class: 'mono', style: { fontSize: '11px' } }, concepto.clave),
+      h('span', { class: 'muted', style: { marginLeft: '6px', fontSize: '11px' } },
+        (concepto.descripcion || '').slice(0, 28))
+    ])
+    : h('span', { class: 'muted', style: { fontSize: '12px' } }, '—');
+}
+
+function renderItemsCard(ctx, refs, handlers, expandedGroups) {
+  const { cot, editable } = ctx;
   const entries = Object.entries(cot.items || {});
 
   const head = h('div', { style: { padding: '14px 18px 0', display: 'flex', alignItems: 'center', gap: '8px' } }, [
@@ -366,18 +456,22 @@ function renderItemsCard(ctx, softAddItem, softRemoveItem, softRecomputeTotales,
       'Items ', h('span', { class: 'muted', style: { fontWeight: 'normal', textTransform: 'none' } }, `(${num0(entries.length)})`)
     ]),
     h('div', { style: { flex: 1 } }),
-    editable && h('button', { class: 'btn sm primary', onClick: () => addItemDialog(ctx, softAddItem) }, '+ Item ad-hoc')
+    editable && h('button', { class: 'btn sm primary', onClick: handlers.addDialog }, '+ Item ad-hoc')
   ]);
 
   if (entries.length === 0) {
     return h('div', { class: 'card' }, [head, h('div', { class: 'empty' }, 'Sin items.')]);
   }
 
+  const groups = groupItems(entries);
   const tbody = h('tbody', {});
-  for (const [id, it] of entries) {
-    tbody.appendChild(itemRow(ctx, id, it, softRemoveItem, softRecomputeTotales, importeCellRefs));
+  for (const g of groups) {
+    if (g.items.length === 1) {
+      tbody.appendChild(singleItemRow(ctx, refs, handlers, g.items[0][0], g.items[0][1]));
+    } else {
+      appendGroupRows(tbody, ctx, refs, handlers, expandedGroups, g);
+    }
   }
-  tbodyRef.node = tbody;
 
   return h('div', { class: 'card', style: { padding: 0 } }, [
     head,
@@ -396,59 +490,138 @@ function renderItemsCard(ctx, softAddItem, softRemoveItem, softRecomputeTotales,
   ]);
 }
 
-function itemRow(ctx, itemId, it, softRemoveItem, softRecomputeTotales, importeCellRefs) {
+// Fila simple: material que solo aparece en un concepto (o ad-hoc).
+function singleItemRow(ctx, refs, handlers, itemId, it) {
   const { cot, conceptos, editable } = ctx;
   const importe = (Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0);
-
-  const matLabel = h('div', {}, [
-    it.clave && h('div', { class: 'mono', style: { fontSize: '11px', color: 'var(--text-2)' } }, [
-      it.clave,
-      it.origen === 'ad_hoc_compras' && h('span', { class: 'tag warn', style: { marginLeft: '6px', fontSize: '10px' } }, 'AD-HOC compras'),
-      (it.origen === 'ad_hoc' || it.origen === 'ad_hoc_materiales')
-        ? h('span', { class: 'tag warn', style: { marginLeft: '6px', fontSize: '10px' } }, 'AD-HOC almacén') : null
-    ]),
-    h('div', {}, it.descripcion || '—'),
-    it.notas && h('div', { class: 'muted', style: { fontSize: '11px' } }, it.notas)
-  ]);
 
   const cantInput = h('input', { type: 'number', step: '0.01', min: '0', value: String(it.cantidad || 0), style: { width: '90px' } });
   cantInput.addEventListener('input', () => {
     cot.items[itemId].cantidad = Number(cantInput.value) || 0;
-    softRecomputeTotales();
+    handlers.recompute();
   });
 
   const costoInput = h('input', { type: 'number', step: '0.01', min: '0', value: String(it.costoUnitario || 0), style: { width: '110px' } });
   costoInput.addEventListener('input', () => {
     cot.items[itemId].costoUnitario = Number(costoInput.value) || 0;
-    softRecomputeTotales();
+    handlers.recompute();
   });
 
   if (!editable) { cantInput.disabled = true; costoInput.disabled = true; }
 
-  const concepto = it.conceptoKey ? conceptos[it.conceptoKey] : null;
-  const conceptoLabel = concepto
-    ? h('span', { title: concepto.descripcion }, [
-      h('span', { class: 'mono', style: { fontSize: '11px' } }, concepto.clave),
-      h('span', { class: 'muted', style: { marginLeft: '6px', fontSize: '11px' } },
-        (concepto.descripcion || '').slice(0, 28))
-    ])
-    : h('span', { class: 'muted', style: { fontSize: '12px' } }, '—');
-
   const importeCell = h('td', { class: 'num' }, money(importe));
-  importeCellRefs[itemId] = importeCell;
+  refs.itemImporte[itemId] = importeCell;
 
   const tr = h('tr', {}, [
-    h('td', { style: { maxWidth: '320px' } }, matLabel),
+    h('td', { style: { maxWidth: '320px' } }, matCellContent(it)),
     h('td', {}, it.unidad || ''),
     h('td', { class: 'num' }, cantInput),
     h('td', { class: 'num' }, costoInput),
     importeCell,
-    h('td', {}, conceptoLabel)
+    h('td', {}, conceptoLabelNode(conceptos, it.conceptoKey))
   ]);
 
   if (editable) {
     const delBtn = h('button', { class: 'btn sm danger' }, '🗑');
-    delBtn.addEventListener('click', () => softRemoveItem(itemId, tr));
+    delBtn.addEventListener('click', () => handlers.remove(itemId));
+    tr.appendChild(h('td', {}, delBtn));
+  }
+  return tr;
+}
+
+// Grupo: un material presente en varios conceptos. Fila cabecera colapsada
+// (precio único) + sub-filas por concepto que se muestran/ocultan al desplegar.
+function appendGroupRows(tbody, ctx, refs, handlers, expandedGroups, g) {
+  const { editable } = ctx;
+  const gk = g.key;
+  const ids = g.items.map(([id]) => id);
+  refs.groupMembers[gk] = ids;
+
+  const first = g.items[0][1];
+  let totalCant = 0, totalImp = 0;
+  for (const [, it] of g.items) {
+    const c = Number(it.cantidad) || 0, u = Number(it.costoUnitario) || 0;
+    totalCant += c; totalImp += c * u;
+  }
+  // Precio del grupo = el del primer concepto (deben coincidir; al editarlo se
+  // unifican todos, lo cual también corrige cualquier desfase heredado).
+  const precioGrupo = Number(first.costoUnitario) || 0;
+  const expanded = expandedGroups.has(gk);
+
+  const cantCell = h('td', { class: 'num' }, num(totalCant, 2));
+  const impCell = h('td', { class: 'num' }, money(totalImp));
+  refs.groupCant[gk] = cantCell;
+  refs.groupImporte[gk] = impCell;
+
+  const costoInput = h('input', { type: 'number', step: '0.01', min: '0', value: String(precioGrupo), style: { width: '110px' } });
+  costoInput.addEventListener('input', () => handlers.setGroupPrecio(ids, Number(costoInput.value) || 0));
+  if (!editable) costoInput.disabled = true;
+
+  const subRows = g.items.map(([id, it]) => groupSubRow(ctx, refs, handlers, id, it));
+
+  const arrow = h('span', { class: 'mono' }, expanded ? '▾' : '▸');
+  const toggleBtn = h('button', { class: 'btn sm', style: { fontSize: '11px', padding: '2px 8px' } }, [
+    arrow, h('span', { style: { marginLeft: '6px' } }, `${g.items.length} conceptos`)
+  ]);
+  toggleBtn.addEventListener('click', () => {
+    const abrir = arrow.textContent === '▸';
+    arrow.textContent = abrir ? '▾' : '▸';
+    if (abrir) expandedGroups.add(gk); else expandedGroups.delete(gk);
+    subRows.forEach(r => { r.style.display = abrir ? '' : 'none'; });
+  });
+
+  const headerRow = h('tr', { style: { background: 'var(--bg-2)' } }, [
+    h('td', { style: { maxWidth: '320px' } }, matCellContent(first)),
+    h('td', {}, first.unidad || ''),
+    cantCell,
+    editable ? h('td', { class: 'num' }, costoInput) : h('td', { class: 'num' }, money(precioGrupo)),
+    impCell,
+    h('td', {}, toggleBtn),
+    editable && h('td', {}, '')
+  ]);
+  tbody.appendChild(headerRow);
+  for (const r of subRows) {
+    r.style.display = expanded ? '' : 'none';
+    tbody.appendChild(r);
+  }
+}
+
+// Sub-fila de un grupo: un concepto concreto. Solo su cantidad es editable;
+// el precio lo gobierna la fila cabecera del material.
+function groupSubRow(ctx, refs, handlers, itemId, it) {
+  const { cot, conceptos, editable } = ctx;
+  const importe = (Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0);
+
+  const cantInput = h('input', { type: 'number', step: '0.01', min: '0', value: String(it.cantidad || 0), style: { width: '90px' } });
+  cantInput.addEventListener('input', () => {
+    cot.items[itemId].cantidad = Number(cantInput.value) || 0;
+    handlers.recompute();
+  });
+  if (!editable) cantInput.disabled = true;
+
+  const importeCell = h('td', { class: 'num' }, money(importe));
+  refs.itemImporte[itemId] = importeCell;
+
+  const conceptoCell = h('td', { style: { maxWidth: '320px', paddingLeft: '28px' } }, [
+    h('div', {}, [
+      h('span', { class: 'muted', style: { marginRight: '6px' } }, '↳'),
+      conceptoLabelNode(conceptos, it.conceptoKey)
+    ]),
+    it.notas && h('div', { class: 'muted', style: { fontSize: '11px', paddingLeft: '18px' } }, it.notas)
+  ]);
+
+  const tr = h('tr', {}, [
+    conceptoCell,
+    h('td', {}, ''),
+    h('td', { class: 'num' }, cantInput),
+    h('td', { class: 'num muted', style: { fontSize: '11px' } }, '↑'),
+    importeCell,
+    h('td', {}, '')
+  ]);
+
+  if (editable) {
+    const delBtn = h('button', { class: 'btn sm danger' }, '🗑');
+    delBtn.addEventListener('click', () => handlers.remove(itemId));
     tr.appendChild(h('td', {}, delBtn));
   }
   return tr;
