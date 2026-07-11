@@ -1,16 +1,16 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711e';
-import { renderShell } from './shell.js?v=20260711e';
-import { state, setState } from '../state/store.js?v=20260711e';
+import { h, toast, modal } from '../util/dom.js?v=20260711f';
+import { renderShell } from './shell.js?v=20260711f';
+import { state, setState } from '../state/store.js?v=20260711f';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
   getOC, getBuzonItem, cancelarOC, updateOC,
   getFacturacion, setFacturacion
-} from '../services/db.js?v=20260711e';
-import { navigate } from '../state/router.js?v=20260711e';
-import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260711e';
-import { estadoOCBadge } from './oc.js?v=20260711e';
-import { exportOcPdf, exportOcDoc, usoCfdiEfectivo } from '../services/oc-export.js?v=20260711e';
+} from '../services/db.js?v=20260711f';
+import { navigate } from '../state/router.js?v=20260711f';
+import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260711f';
+import { estadoOCBadge } from './oc.js?v=20260711f';
+import { exportOcPdf, exportOcDoc, usoCfdiEfectivo } from '../services/oc-export.js?v=20260711f';
 
 const ESTADOS_CANCELABLES = new Set(['borrador', 'enviada_buzon', 'aprobada', 'rechazada', 'huerfana']);
 
@@ -98,8 +98,8 @@ export async function renderOCDetalle({ params }) {
   const head = h('div', { class: 'row' }, [
     h('h1', {}, [folio, ' ', estadoOCBadge(estadoEfectivo)]),
     h('div', { style: { flex: 1 } }),
-    h('button', { class: 'btn ghost', onClick: () => exportOcPdf(obraParaExport, ocParaExport, factur), title: 'Descargar PDF de la OC' }, '⬇ PDF'),
-    h('button', { class: 'btn ghost', onClick: () => exportOcDoc(obraParaExport, ocParaExport, factur), title: 'Descargar Word (.doc) editable de la OC' }, '⬇ Word'),
+    h('button', { class: 'btn ghost', onClick: () => { exportOcPdf(obraParaExport, ocParaExport, factur).catch(e => toast('Error al generar PDF: ' + e.message, 'danger')); }, title: 'Descargar PDF de la OC' }, '⬇ PDF'),
+    h('button', { class: 'btn ghost', onClick: () => { exportOcDoc(obraParaExport, ocParaExport, factur).catch(e => toast('Error al generar Word: ' + e.message, 'danger')); }, title: 'Descargar Word (.doc) editable de la OC' }, '⬇ Word'),
     isAdmin && h('button', { class: 'btn ghost', onClick: () => datosFacturaDialog(factur, obraId, ocId), title: 'Datos fiscales de SOGRUB para la leyenda de factura (se guardan globales, aplican a todas las OC)' }, '⚙ Datos factura'),
     ESTADOS_CANCELABLES.has(estadoEfectivo) && h('button', {
       class: 'btn danger',

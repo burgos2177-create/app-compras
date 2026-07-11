@@ -4,6 +4,8 @@
 // Incluye una leyenda amable solicitando la emisión de la factura (CFDI) con los
 // datos fiscales de SOGRUB (configurables en la vista de OC).
 
+import { getLogoDataURL, drawPdfBrandHeader, brandHeaderHTML } from './brand.js?v=20260711f';
+
 const BRAND = { r: 40, g: 50, b: 65 };
 
 function money(n) {
@@ -38,28 +40,16 @@ function retArr(oc) {
 }
 
 // ===================== PDF =====================
-export function exportOcPdf(obra, oc, factur = {}) {
+export async function exportOcPdf(obra, oc, factur = {}) {
   const m = obra?.meta || {};
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const W = doc.internal.pageSize.width;
   const folio = oc.folio || ('OC-' + String(oc.numero || 0).padStart(4, '0'));
 
-  // Encabezado
-  doc.setFillColor(BRAND.r, BRAND.g, BRAND.b);
-  doc.rect(0, 0, W, 92, 'F');
-  doc.setTextColor(255).setFont('helvetica', 'bold').setFontSize(22);
-  doc.text('SOGRUB', 40, 42);
-  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(215);
-  doc.text('Grupo Constructor', 40, 58);
-  doc.setFont('helvetica', 'bold').setFontSize(16).setTextColor(255);
-  doc.text('ORDEN DE COMPRA', W - 40, 40, { align: 'right' });
-  doc.setFont('helvetica', 'normal').setFontSize(11).setTextColor(220);
-  doc.text(folio, W - 40, 60, { align: 'right' });
-  doc.setFontSize(9).setTextColor(210);
-  doc.text(fecha(oc.fechaEmision), W - 40, 76, { align: 'right' });
-
-  let y = 120;
+  // Encabezado con logo SOGRUB
+  const logo = await getLogoDataURL();
+  let y = drawPdfBrandHeader(doc, W, { title: 'ORDEN DE COMPRA', folio, fecha: fecha(oc.fechaEmision), logo });
   doc.setTextColor(60).setFont('helvetica', 'bold').setFontSize(10);
   doc.text('Obra:', 40, y);
   doc.setFont('helvetica', 'normal');
@@ -180,9 +170,10 @@ function leyendaFactura(f, folio, oc) {
 }
 
 // ===================== WORD (.doc, HTML) =====================
-export function exportOcDoc(obra, oc, factur = {}) {
+export async function exportOcDoc(obra, oc, factur = {}) {
   const m = obra?.meta || {};
   const folio = oc.folio || ('OC-' + String(oc.numero || 0).padStart(4, '0'));
+  const logo = await getLogoDataURL();
   const rows = itemsArr(oc).map((it, i) => `
     <tr>
       <td style="text-align:center">${i + 1}</td>
@@ -222,11 +213,7 @@ export function exportOcDoc(obra, oc, factur = {}) {
   h4 { color:#28323f; margin:0 0 6px 0; }
 </style></head>
 <body>
-  <table style="width:100%" class="band"><tr>
-    <td><div class="t">SOGRUB</div><div style="font-size:9pt">Grupo Constructor</div></td>
-    <td class="r"><div style="font-size:15pt;font-weight:bold">ORDEN DE COMPRA</div>
-      <div>${folio}</div><div style="font-size:9pt">${fecha(oc.fechaEmision)}</div></td>
-  </tr></table>
+  ${brandHeaderHTML(logo, { title: 'ORDEN DE COMPRA', folio, fecha: fecha(oc.fechaEmision) })}
 
   <p style="margin-top:12px"><b>Obra:</b> ${esc(m.nombre)}${m.contratoNo ? '  ·  Contrato ' + esc(m.contratoNo) : ''}
   ${(m.ubicacion || m.municipio) ? `<br><b>Ubicación:</b> ${esc(m.ubicacion)}${m.municipio ? ', ' + esc(m.municipio) : ''}` : ''}</p>

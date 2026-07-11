@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711e';
-import { renderShell } from './shell.js?v=20260711e';
-import { state, setState } from '../state/store.js?v=20260711e';
+import { h, toast, modal } from '../util/dom.js?v=20260711f';
+import { renderShell } from './shell.js?v=20260711f';
+import { state, setState } from '../state/store.js?v=20260711f';
 import {
   getObraMetaLegacy,
   listProveedoresObra, addProveedorAObra, removeProveedorObra,
@@ -8,9 +8,9 @@ import {
   listProveedoresGlobal, addProveedorGlobal,
   listCotizaciones, getProyectoIdByObraId,
   mergeProveedorObraConGlobal
-} from '../services/db.js?v=20260711e';
-import { navigate } from '../state/router.js?v=20260711e';
-import { dateMx, num0, money } from '../util/format.js?v=20260711e';
+} from '../services/db.js?v=20260711f';
+import { navigate } from '../state/router.js?v=20260711f';
+import { dateMx, num0, money } from '../util/format.js?v=20260711f';
 
 // Lista de proveedores asignados a una obra (sogrub_proy_proveedores filtrado
 // por proyectoId de la obra). Patrón calcado de bitácora: catálogo global +

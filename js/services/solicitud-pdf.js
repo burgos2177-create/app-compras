@@ -15,7 +15,9 @@
 //   generadoAt
 // }
 
-const BRAND = { r: 40, g: 50, b: 65 };
+import { getLogoDataURL, drawPdfBrandHeader } from './brand.js?v=20260711f';
+
+const BRAND = { r: 32, g: 33, b: 86 };   // navy SOGRUB (encabezados de tabla / cajas)
 
 function fecha(ts) {
   const d = ts ? new Date(ts) : new Date();
@@ -23,7 +25,7 @@ function fecha(ts) {
 }
 function safe(s) { return String(s || '').replace(/[^a-z0-9-_]/gi, '_').slice(0, 50); }
 
-export function abrirSolicitudPDF(p) {
+export async function abrirSolicitudPDF(p) {
   if (!window.jspdf || !window.jspdf.jsPDF) {
     alert('No se pudo cargar el generador de PDF. Revisa tu conexión y recarga.');
     return;
@@ -37,22 +39,9 @@ export function abrirSolicitudPDF(p) {
     Math.random().toString(36).slice(2, 6).toUpperCase();
   const incluirCant = p.incluirCantidades !== false;
 
-  // === Encabezado ===
-  doc.setFillColor(BRAND.r, BRAND.g, BRAND.b);
-  doc.rect(0, 0, W, 92, 'F');
-  doc.setTextColor(255).setFont('helvetica', 'bold').setFontSize(22);
-  doc.text('SOGRUB', 40, 42);
-  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(215);
-  doc.text('Grupo Constructor', 40, 58);
-  doc.setFont('helvetica', 'bold').setFontSize(15).setTextColor(255);
-  doc.text('SOLICITUD DE COTIZACIÓN', W - 40, 40, { align: 'right' });
-  doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(220);
-  doc.text(folioInterno, W - 40, 58, { align: 'right' });
-  doc.setFontSize(9).setTextColor(210);
-  doc.text(fecha(gen), W - 40, 74, { align: 'right' });
-
-  // === Obra ===
-  let y = 118;
+  // === Encabezado con logo SOGRUB ===
+  const logo = await getLogoDataURL();
+  let y = drawPdfBrandHeader(doc, W, { title: 'SOLICITUD DE COTIZACIÓN', folio: folioInterno, fecha: fecha(gen), logo });
   const m = p.obra || {};
   doc.setTextColor(60).setFont('helvetica', 'bold').setFontSize(10);
   doc.text('Obra:', 40, y);

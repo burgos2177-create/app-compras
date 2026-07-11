@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711e';
-import { renderShell } from './shell.js?v=20260711e';
-import { state, setState } from '../state/store.js?v=20260711e';
+import { h, toast, modal } from '../util/dom.js?v=20260711f';
+import { renderShell } from './shell.js?v=20260711f';
+import { state, setState } from '../state/store.js?v=20260711f';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
@@ -11,13 +11,13 @@ import {
   pushBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq,
   buildPreciosPorProveedorObra
-} from '../services/db.js?v=20260711e';
-import { navigate } from '../state/router.js?v=20260711e';
-import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711e';
-import { deriveTotales } from '../services/totales.js?v=20260711e';
-import { emitirOC } from '../services/oc-emit.js?v=20260711e';
-import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711e';
-import { estadoCotBadge } from './cotizaciones.js?v=20260711e';
+} from '../services/db.js?v=20260711f';
+import { navigate } from '../state/router.js?v=20260711f';
+import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711f';
+import { deriveTotales } from '../services/totales.js?v=20260711f';
+import { emitirOC } from '../services/oc-emit.js?v=20260711f';
+import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711f';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711f';
 
 // Captura/edita una cotización contra una requisición aprobada y emite la OC.
 //
@@ -715,7 +715,7 @@ function onSolicitudPdf(ctx) {
   const items = solicitudItemsFromCot(cot, materiales);
   if (items.length === 0) { toast('La cotización no tiene materiales', 'danger'); return; }
   const u = state.user || {};
-  abrirSolicitudPDF({
+  Promise.resolve(abrirSolicitudPDF({
     obra: meta || {},
     destinatario: {
       nombre: cot.proveedor?.nombre || 'A quien corresponda',
@@ -731,7 +731,7 @@ function onSolicitudPdf(ctx) {
     autor: { nombre: u.displayName || u.email || '', email: u.email || '' },
     items,
     generadoAt: Date.now()
-  });
+  })).catch(e => toast('Error al generar PDF: ' + e.message, 'danger'));
 }
 
 async function onSave(ctx, marcarRecibida) {
