@@ -1,25 +1,25 @@
-import { onAuth, getUserProfile } from './services/auth.js?v=20260711h';
-import { state, setState } from './state/store.js?v=20260711h';
-import { route, startRouter, navigate } from './state/router.js?v=20260711h';
-import { renderLogin } from './views/login.js?v=20260711h';
-import { renderObrasList } from './views/obras.js?v=20260711h';
-import { renderObra } from './views/obra.js?v=20260711h';
-import { renderAdmin } from './views/admin.js?v=20260711h';
-import { renderInbox } from './views/inbox.js?v=20260711h';
-import { renderInboxDetalle } from './views/inbox-detalle.js?v=20260711h';
-import { renderCotizaciones } from './views/cotizaciones.js?v=20260711h';
-import { renderCotizacionDetalle } from './views/cotizacion-detalle.js?v=20260711h';
-import { renderOCList } from './views/oc.js?v=20260711h';
-import { renderOCDetalle } from './views/oc-detalle.js?v=20260711h';
-import { renderProveedores } from './views/proveedores.js?v=20260711h';
-import { renderProveedoresObra } from './views/proveedores-obra.js?v=20260711h';
-import { renderProveedorObraDetalle } from './views/proveedor-obra-detalle.js?v=20260711h';
-import { renderCatalogoPrecios } from './views/catalogo-precios.js?v=20260711h';
-import { renderSolicitarCotizacion } from './views/solicitar-cotizacion.js?v=20260711h';
-import { renderCompraServicio } from './views/compra-servicio.js?v=20260711h';
-import { renderSubcontratos } from './views/subcontratos.js?v=20260711h';
-import { renderSubcontratoDetalle } from './views/subcontrato.js?v=20260711h';
-import { h, mount } from './util/dom.js?v=20260711h';
+import { onAuth, getUserProfile } from './services/auth.js?v=20260711i';
+import { state, setState } from './state/store.js?v=20260711i';
+import { route, startRouter, navigate } from './state/router.js?v=20260711i';
+import { renderLogin } from './views/login.js?v=20260711i';
+import { renderObrasList } from './views/obras.js?v=20260711i';
+import { renderObra } from './views/obra.js?v=20260711i';
+import { renderAdmin } from './views/admin.js?v=20260711i';
+import { renderInbox } from './views/inbox.js?v=20260711i';
+import { renderInboxDetalle } from './views/inbox-detalle.js?v=20260711i';
+import { renderCotizaciones } from './views/cotizaciones.js?v=20260711i';
+import { renderCotizacionDetalle } from './views/cotizacion-detalle.js?v=20260711i';
+import { renderOCList } from './views/oc.js?v=20260711i';
+import { renderOCDetalle } from './views/oc-detalle.js?v=20260711i';
+import { renderProveedores } from './views/proveedores.js?v=20260711i';
+import { renderProveedoresObra } from './views/proveedores-obra.js?v=20260711i';
+import { renderProveedorObraDetalle } from './views/proveedor-obra-detalle.js?v=20260711i';
+import { renderCatalogoPrecios } from './views/catalogo-precios.js?v=20260711i';
+import { renderSolicitarCotizacion } from './views/solicitar-cotizacion.js?v=20260711i';
+import { renderCompraServicio } from './views/compra-servicio.js?v=20260711i';
+import { renderSubcontratos } from './views/subcontratos.js?v=20260711i';
+import { renderSubcontratoDetalle } from './views/subcontrato.js?v=20260711i';
+import { h, mount } from './util/dom.js?v=20260711i';
 
 route('/',                                  () => renderObrasList());
 route('/admin',                             () => renderAdmin());
@@ -59,7 +59,7 @@ onAuth(async (fbUser) => {
       h('p', { class: 'sub muted', style: { fontSize: '12px' } },
         'Pide al administrador que te dé de alta en la app de estimaciones o aquí mismo.'),
       h('button', { class: 'btn', onClick: async () => {
-        const { logout } = await import('./services/auth.js?v=20260711h');
+        const { logout } = await import('./services/auth.js?v=20260711i');
         logout();
       } }, 'Salir')
     ])));

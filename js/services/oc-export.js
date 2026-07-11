@@ -4,7 +4,7 @@
 // Incluye una leyenda amable solicitando la emisión de la factura (CFDI) con los
 // datos fiscales de SOGRUB (configurables en la vista de OC).
 
-import { getLogoDataURL, drawPdfBrandHeader, brandHeaderHTML } from './brand.js?v=20260711h';
+import { getLogoDataURL, drawPdfBrandHeader, brandHeaderHTML } from './brand.js?v=20260711i';
 
 const BRAND = { r: 40, g: 50, b: 65 };
 
@@ -107,7 +107,11 @@ export async function exportOcPdf(obra, oc, factur = {}) {
   line('Subtotal', money(oc.subtotal));
   line(`IVA (${((oc.ivaPct ?? 0.16) * 100).toFixed(0)}%)`, money(oc.ivaImporte));
   for (const r of retArr(oc)) line(`Ret. ${r.label}`, '- ' + money(r.importe));
-  doc.setDrawColor(200).line(lx, ty - 4, rx, ty - 4);
+  // Separador con holgura para que NO se encime con el texto del TOTAL.
+  ty += 4;
+  doc.setDrawColor(200).setLineWidth(0.8).line(lx, ty, rx, ty);
+  doc.setLineWidth(0.5);
+  ty += 18;
   line('TOTAL', money(oc.total), true);
 
   // Leyenda de factura

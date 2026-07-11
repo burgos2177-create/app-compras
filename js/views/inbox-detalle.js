@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711h';
-import { renderShell } from './shell.js?v=20260711h';
-import { state, setState } from '../state/store.js?v=20260711h';
+import { h, toast, modal } from '../util/dom.js?v=20260711i';
+import { renderShell } from './shell.js?v=20260711i';
+import { state, setState } from '../state/store.js?v=20260711i';
 import {
   getObraMetaLegacy, getBuzonItem, updateBuzonItem,
   getRequisicionMateriales,
@@ -8,12 +8,12 @@ import {
   listOC, listCotizaciones, calcularCoberturaReq,
   buildPreciosPorProveedorObra, analizarReqVsProveedores,
   aplicarReemplazosRequisicion
-} from '../services/db.js?v=20260711h';
-import { emitirOC } from '../services/oc-emit.js?v=20260711h';
-import { navigate } from '../state/router.js?v=20260711h';
-import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260711h';
-import { estadoCotBadge } from './cotizaciones.js?v=20260711h';
-import { estadoBuzonBadge } from './inbox.js?v=20260711h';
+} from '../services/db.js?v=20260711i';
+import { emitirOC } from '../services/oc-emit.js?v=20260711i';
+import { navigate } from '../state/router.js?v=20260711i';
+import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260711i';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711i';
+import { estadoBuzonBadge } from './inbox.js?v=20260711i';
 
 // Detalle de una requisición que llegó al inbox de compras (item del buzón
 // con tipo='requisicion_materiales'). Acciones del comprador:
