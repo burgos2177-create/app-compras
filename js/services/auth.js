@@ -1,8 +1,8 @@
 import {
   signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js';
-import { auth, firebaseConfig } from './firebase.js?v=20260711d';
-import { rread, rset, rupdate } from './db.js?v=20260711d';
+import { auth, firebaseConfig } from './firebase.js?v=20260711e';
+import { rread, rset, rupdate } from './db.js?v=20260711e';
 
 // Mismo patrón que app-materiales: signUp via REST para no perder la sesión
 // del admin. La fuente única de usuarios está en /legacy/estimaciones/users.

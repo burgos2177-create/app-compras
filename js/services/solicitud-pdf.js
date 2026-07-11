@@ -3,8 +3,9 @@
 // llene. Branding SOGRUB. Lo usan la vista "Solicitar cotización" (armado manual
 // desde catálogo) y el detalle de una cotización (materiales de esa cotización).
 //
-// Abre una ventana nueva con HTML + CSS @media print y dispara window.print().
-// Sin dependencias (no jsPDF): el usuario elige "Guardar como PDF" o imprimir.
+// Se genera con jsPDF (ya cargado en index.html) y se DESCARGA directo con
+// doc.save() — igual que la OC. No usa window.open (que en Ferdium/Electron y
+// con bloqueadores de popups no hace nada).
 //
 // payload = {
 //   obra: { nombre, contratoNo }, destinatario: { nombre, rfc, contacto, email, telefono },
@@ -13,198 +14,170 @@
 //   items: [{ clave, descripcion, unidad, marca, familia, cantidad, notasItem }],
 //   generadoAt
 // }
+
+const BRAND = { r: 40, g: 50, b: 65 };
+
+function fecha(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
+}
+function safe(s) { return String(s || '').replace(/[^a-z0-9-_]/gi, '_').slice(0, 50); }
+
 export function abrirSolicitudPDF(p) {
-  const w = window.open('', '_blank', 'width=900,height=1200');
-  if (!w) { alert('El navegador bloqueó la ventana. Permite popups y vuelve a intentar.'); return; }
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    alert('No se pudo cargar el generador de PDF. Revisa tu conexión y recarga.');
+    return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+  const W = doc.internal.pageSize.width;
 
-  const fechaStr = new Date(p.generadoAt).toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
-  const folioInterno = 'SC-' + new Date(p.generadoAt).toISOString().slice(0, 10).replace(/-/g, '') + '-' +
+  const gen = p.generadoAt || Date.now();
+  const folioInterno = 'SC-' + new Date(gen).toISOString().slice(0, 10).replace(/-/g, '') + '-' +
     Math.random().toString(36).slice(2, 6).toUpperCase();
-  const obraNombre = p.obra?.nombre || '—';
-  const obraContrato = p.obra?.contratoNo || '';
+  const incluirCant = p.incluirCantidades !== false;
 
-  // Agrupar items por familia para presentación más limpia
+  // === Encabezado ===
+  doc.setFillColor(BRAND.r, BRAND.g, BRAND.b);
+  doc.rect(0, 0, W, 92, 'F');
+  doc.setTextColor(255).setFont('helvetica', 'bold').setFontSize(22);
+  doc.text('SOGRUB', 40, 42);
+  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(215);
+  doc.text('Grupo Constructor', 40, 58);
+  doc.setFont('helvetica', 'bold').setFontSize(15).setTextColor(255);
+  doc.text('SOLICITUD DE COTIZACIÓN', W - 40, 40, { align: 'right' });
+  doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(220);
+  doc.text(folioInterno, W - 40, 58, { align: 'right' });
+  doc.setFontSize(9).setTextColor(210);
+  doc.text(fecha(gen), W - 40, 74, { align: 'right' });
+
+  // === Obra ===
+  let y = 118;
+  const m = p.obra || {};
+  doc.setTextColor(60).setFont('helvetica', 'bold').setFontSize(10);
+  doc.text('Obra:', 40, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`${m.nombre || '—'}${m.contratoNo ? '  ·  Contrato ' + m.contratoNo : ''}`, 78, y);
+  if (p.vigenciaDias) {
+    doc.setFont('helvetica', 'bold').text('Vigencia solicitada:', W - 200, y);
+    doc.setFont('helvetica', 'normal').text(`${p.vigenciaDias} días`, W - 90, y);
+  }
+
+  // === Caja "PARA" (proveedor) ===
+  y += 20;
+  const d = p.destinatario || {};
+  doc.setDrawColor(210).setFillColor(247, 249, 252);
+  doc.roundedRect(40, y, W - 80, 66, 4, 4, 'FD');
+  doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(90);
+  doc.text('PARA', 52, y + 16);
+  doc.setTextColor(35).setFontSize(11).text(d.nombre || 'A quien corresponda', 52, y + 33);
+  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(70);
+  const pdatos = [];
+  if (d.rfc) pdatos.push('RFC: ' + d.rfc);
+  if (d.contacto) pdatos.push("At'n: " + d.contacto);
+  if (d.telefono) pdatos.push('Tel: ' + d.telefono);
+  if (d.email) pdatos.push(d.email);
+  if (pdatos.length) doc.text(pdatos.join('   ·   '), 52, y + 49);
+  if (p.fechaEntrega) doc.text('Entrega requerida: ' + p.fechaEntrega, 52, y + 61);
+  y += 82;
+
+  // === Tabla de materiales (precio en blanco para que el proveedor lo llene) ===
+  // Agrupamos por familia con filas separadoras.
   const porFam = new Map();
-  for (const it of p.items) {
+  for (const it of (p.items || [])) {
     const fam = it.familia || '(General)';
     if (!porFam.has(fam)) porFam.set(fam, []);
     porFam.get(fam).push(it);
   }
   const fams = Array.from(porFam.keys()).sort();
+  const multiFam = fams.length > 1 || (fams.length === 1 && fams[0] !== '(General)');
 
-  const esc = (s) => String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const head = incluirCant
+    ? [['#', 'Clave', 'Descripción', 'Unidad', 'Marca', 'Cantidad', 'Precio unitario']]
+    : [['#', 'Clave', 'Descripción', 'Unidad', 'Marca', 'Precio unitario']];
+  const nCols = head[0].length;
 
-  const rowsHTML = fams.map(fam => {
-    const items = porFam.get(fam).sort((a, b) => (a.clave || '').localeCompare(b.clave || ''));
-    return `
-      <tr class="fam-row"><td colspan="${p.incluirCantidades ? 6 : 5}">${esc(fam)}</td></tr>
-      ${items.map((it, i) => `
-        <tr>
-          <td class="num">${i + 1}</td>
-          <td class="mono">${esc(it.clave)}</td>
-          <td>${esc(it.descripcion)}${it.notasItem ? `<div class="notas">${esc(it.notasItem)}</div>` : ''}</td>
-          <td>${esc(it.unidad)}</td>
-          <td>${esc(it.marca)}</td>
-          ${p.incluirCantidades ? `<td class="num">${it.cantidad || ''}</td>` : ''}
-          <td class="precio-cell"></td>
-        </tr>
-      `).join('')}
-    `;
-  }).join('');
+  const body = [];
+  let idx = 0;
+  for (const fam of fams) {
+    if (multiFam) {
+      body.push([{ content: fam, colSpan: nCols, styles: { fillColor: [238, 240, 245], textColor: [31, 37, 48], fontStyle: 'bold', halign: 'left' } }]);
+    }
+    for (const it of porFam.get(fam).sort((a, b) => (a.clave || '').localeCompare(b.clave || ''))) {
+      idx++;
+      const descFull = (it.descripcion || '') + (it.notasItem ? `\n${it.notasItem}` : '');
+      const row = [String(idx), it.clave || '', descFull, it.unidad || '', it.marca || ''];
+      if (incluirCant) row.push(it.cantidad != null && it.cantidad !== '' ? String(it.cantidad) : '');
+      row.push(''); // Precio unitario — en blanco
+      body.push(row);
+    }
+  }
 
-  const html = `<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <title>Solicitud de cotización · ${esc(folioInterno)}</title>
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
-      font-size: 11px; color: #1f2530; margin: 0; padding: 24px;
-      background: #fff;
-    }
-    h1 { font-size: 18px; margin: 0 0 4px; color: #1f2530; }
-    h2 { font-size: 13px; margin: 18px 0 8px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
-    .header {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
-      border-bottom: 2px solid #1f2530; padding-bottom: 12px; margin-bottom: 16px;
-    }
-    .brand-block { }
-    .brand-name { font-size: 20px; font-weight: 700; color: #1f2530; letter-spacing: -0.3px; }
-    .brand-sub { font-size: 11px; color: #777; margin-top: 2px; }
-    .meta-block { text-align: right; }
-    .folio { font-family: ui-monospace, Consolas, monospace; font-size: 14px; font-weight: 600; color: #1f2530; }
-    .meta-line { font-size: 11px; color: #555; margin-top: 2px; }
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0; }
-    .box {
-      border: 1px solid #d4d8e0; border-radius: 6px; padding: 10px 12px;
-      background: #fafbfc;
-    }
-    .box .lbl { font-size: 9px; color: #888; text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 2px; }
-    .box .val { font-size: 12px; font-weight: 600; }
-    .box .extra { font-size: 10px; color: #666; margin-top: 1px; }
-    table.items { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    table.items th, table.items td { padding: 5px 8px; text-align: left; border-bottom: 1px solid #e0e3ea; vertical-align: top; }
-    table.items th { background: #1f2530; color: #fff; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; font-weight: 600; }
-    table.items td.num { text-align: right; font-family: ui-monospace, Consolas, monospace; }
-    table.items tr.fam-row td {
-      background: #eef0f5; font-weight: 600; font-size: 11px; color: #1f2530;
-      border-bottom: 2px solid #1f2530; padding: 6px 8px;
-    }
-    table.items td.mono { font-family: ui-monospace, Consolas, monospace; font-size: 10px; color: #555; }
-    table.items .notas { font-size: 10px; color: #777; margin-top: 2px; font-style: italic; }
-    table.items td.precio-cell {
-      min-width: 80px; border-left: 1px dashed #d4d8e0;
-      background: #fafbfc;
-    }
-    .footer-note {
-      margin-top: 16px; padding: 10px 12px; background: #fafbfc;
-      border-left: 3px solid #1f2530; font-size: 11px; color: #555;
-    }
-    .signature {
-      margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 30px;
-    }
-    .signature .line {
-      border-top: 1px solid #1f2530; padding-top: 4px; text-align: center;
-      font-size: 10px; color: #555;
-    }
-    .toolbar {
-      position: fixed; top: 12px; right: 12px; display: flex; gap: 8px;
-      background: #fff; padding: 6px 10px; border-radius: 6px;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
-    }
-    .toolbar button {
-      padding: 6px 12px; font-size: 12px; cursor: pointer;
-      border: 1px solid #1f2530; background: #1f2530; color: #fff; border-radius: 4px;
-    }
-    .toolbar button.ghost { background: transparent; color: #1f2530; }
-    @media print {
-      .toolbar { display: none; }
-      body { padding: 16px; }
-      table.items tr { page-break-inside: avoid; }
-      table.items tr.fam-row { page-break-after: avoid; }
-      thead { display: table-header-group; }
-    }
-    @page { size: letter; margin: 12mm; }
-  </style>
-</head>
-<body>
-  <div class="toolbar">
-    <button onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
-    <button class="ghost" onclick="window.close()">Cerrar</button>
-  </div>
+  const priceCol = nCols - 1;
+  const columnStyles = {
+    0: { cellWidth: 22, halign: 'center' },
+    1: { cellWidth: 66, font: 'courier', fontSize: 8 },
+    2: { cellWidth: incluirCant ? 178 : 210 },
+    3: { cellWidth: 40, halign: 'center' },
+    4: { cellWidth: 66, fontSize: 8 },
+    [priceCol]: { cellWidth: 74, fillColor: [250, 250, 250] }
+  };
+  if (incluirCant) columnStyles[5] = { cellWidth: 52, halign: 'right' };
 
-  <div class="header">
-    <div class="brand-block">
-      <div class="brand-name">SOGRUB</div>
-      <div class="brand-sub">Grupo Constructor</div>
-      <div class="brand-sub" style="margin-top: 6px;">Solicitud de cotización</div>
-    </div>
-    <div class="meta-block">
-      <div class="folio">${esc(folioInterno)}</div>
-      <div class="meta-line">Fecha: ${esc(fechaStr)}</div>
-      ${p.vigenciaDias ? `<div class="meta-line">Vigencia solicitada: ${esc(p.vigenciaDias)} días</div>` : ''}
-    </div>
-  </div>
+  doc.autoTable({
+    startY: y,
+    head, body,
+    styles: { font: 'helvetica', fontSize: 9, cellPadding: 5, lineColor: [225, 230, 236], lineWidth: 0.5, valign: 'top' },
+    headStyles: { fillColor: [BRAND.r, BRAND.g, BRAND.b], textColor: 255, fontStyle: 'bold', fontSize: 8.5 },
+    columnStyles,
+    margin: { left: 40, right: 40 }
+  });
 
-  <div class="grid-2">
-    <div class="box">
-      <div class="lbl">Para</div>
-      <div class="val">${esc(p.destinatario.nombre)}</div>
-      ${p.destinatario.rfc ? `<div class="extra">RFC: ${esc(p.destinatario.rfc)}</div>` : ''}
-      ${p.destinatario.contacto ? `<div class="extra">Atención: ${esc(p.destinatario.contacto)}</div>` : ''}
-      ${p.destinatario.email ? `<div class="extra">${esc(p.destinatario.email)}</div>` : ''}
-      ${p.destinatario.telefono ? `<div class="extra">Tel: ${esc(p.destinatario.telefono)}</div>` : ''}
-    </div>
-    <div class="box">
-      <div class="lbl">Obra</div>
-      <div class="val">${esc(obraNombre)}</div>
-      ${obraContrato ? `<div class="extra">Contrato: ${esc(obraContrato)}</div>` : ''}
-      ${p.fechaEntrega ? `<div class="extra">Entrega: ${esc(p.fechaEntrega)}</div>` : ''}
-      ${p.autor.nombre ? `<div class="extra">Solicita: ${esc(p.autor.nombre)}</div>` : ''}
-    </div>
-  </div>
+  let ny = doc.lastAutoTable.finalY + 16;
+  const bottom = doc.internal.pageSize.height;
 
-  <h2>Materiales a cotizar (${p.items.length})</h2>
-  <table class="items">
-    <thead>
-      <tr>
-        <th style="width: 30px;">#</th>
-        <th style="width: 100px;">Clave</th>
-        <th>Descripción</th>
-        <th style="width: 50px;">Unidad</th>
-        <th style="width: 90px;">Marca</th>
-        ${p.incluirCantidades ? '<th style="width: 70px;" class="num">Cantidad</th>' : ''}
-        <th style="width: 90px;">Precio unitario</th>
-      </tr>
-    </thead>
-    <tbody>${rowsHTML}</tbody>
-  </table>
+  // === Observaciones (si hay) ===
+  if (p.notas) {
+    const wrapped = doc.splitTextToSize(p.notas, W - 80 - 24);
+    const boxH = 22 + wrapped.length * 12 + 6;
+    if (ny + boxH > bottom - 90) { doc.addPage(); ny = 60; }
+    doc.setDrawColor(BRAND.r, BRAND.g, BRAND.b).setFillColor(247, 249, 252);
+    doc.roundedRect(40, ny, W - 80, boxH, 4, 4, 'FD');
+    doc.setFont('helvetica', 'bold').setFontSize(9.5).setTextColor(BRAND.r, BRAND.g, BRAND.b);
+    doc.text('OBSERVACIONES', 52, ny + 16);
+    doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(60);
+    doc.text(wrapped, 52, ny + 31);
+    ny += boxH + 14;
+  }
 
-  ${p.notas ? `
-  <div class="footer-note">
-    <strong>Observaciones:</strong><br>${esc(p.notas).replace(/\n/g, '<br>')}
-  </div>` : ''}
+  // === Leyenda RFQ ===
+  const leyenda = doc.splitTextToSize(
+    'Esta solicitud no constituye una orden de compra. Sirve únicamente para obtener su mejor cotización en los materiales listados. ' +
+    'Por favor responda incluyendo precio unitario, tiempo de entrega y condiciones de pago.', W - 80);
+  const lH = leyenda.length * 12 + 8;
+  if (ny + lH > bottom - 80) { doc.addPage(); ny = 60; }
+  doc.setFont('helvetica', 'italic').setFontSize(9).setTextColor(90);
+  doc.text(leyenda, 40, ny + 4);
+  ny += lH + 24;
 
-  <div class="footer-note" style="font-size: 10px;">
-    Esta solicitud no constituye una orden de compra. Sirve únicamente para obtener su mejor cotización
-    en los materiales listados. Por favor responda incluyendo precio unitario, tiempo de entrega y condiciones de pago.
-  </div>
+  // === Firmas ===
+  if (ny > bottom - 70) { doc.addPage(); ny = 90; }
+  const c1 = 150, c2 = W - 150;
+  doc.setDrawColor(120);
+  doc.line(c1 - 80, ny, c1 + 80, ny);
+  doc.line(c2 - 80, ny, c2 + 80, ny);
+  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(90);
+  doc.text(p.autor?.nombre || 'Solicita', c1, ny + 14, { align: 'center' });
+  doc.setFontSize(8).setTextColor(130);
+  doc.text('SOGRUB · Departamento de compras', c1, ny + 26, { align: 'center' });
+  doc.setFontSize(9).setTextColor(90);
+  doc.text(d.nombre || 'Proveedor', c2, ny + 14, { align: 'center' });
+  doc.setFontSize(8).setTextColor(130);
+  doc.text('Firma de recibido', c2, ny + 26, { align: 'center' });
 
-  <div class="signature">
-    <div class="line">${esc(p.autor.nombre || 'Solicita')}<br><span style="font-size: 9px; color: #888;">SOGRUB · Departamento de compras</span></div>
-    <div class="line">${esc(p.destinatario.nombre)}<br><span style="font-size: 9px; color: #888;">Firma de recibido</span></div>
-  </div>
+  // === Pie ===
+  doc.setFontSize(8).setTextColor(150);
+  doc.text(`SOGRUB · ${folioInterno} · ${new Date().toLocaleString('es-MX')}`, 40, bottom - 24);
 
-  <script>
-    // Auto-print al cargar — el usuario decide cancelar si solo quiere ver
-    window.addEventListener('load', () => { setTimeout(() => window.print(), 300); });
-  </script>
-</body>
-</html>`;
-
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
+  doc.save(`Solicitud_cotizacion_${safe(d.nombre || 'proveedor')}.pdf`);
 }
