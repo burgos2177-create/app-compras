@@ -1,12 +1,12 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711g';
-import { renderShell } from './shell.js?v=20260711g';
-import { state } from '../state/store.js?v=20260711g';
+import { h, toast, modal } from '../util/dom.js?v=20260711h';
+import { renderShell } from './shell.js?v=20260711h';
+import { state } from '../state/store.js?v=20260711h';
 import {
   listProveedoresGlobal, addProveedorGlobal,
   updateProveedorGlobal, deleteProveedorGlobal,
   getGoogleClientId, setGoogleClientId
-} from '../services/db.js?v=20260711g';
-import { uploadProveedorDoc, gisReady } from '../services/drive.js?v=20260711g';
+} from '../services/db.js?v=20260711h';
+import { uploadProveedorDoc, gisReady } from '../services/drive.js?v=20260711h';
 
 // Los navegadores envoltorio (Ferdium/Electron) no completan el popup de OAuth:
 // el token nunca vuelve. Avisamos para que suban desde Chrome/Edge real.
@@ -158,7 +158,7 @@ async function configDriveDialog(current) {
     testBtn.disabled = true; testOut.textContent = 'Abriendo Google…'; testOut.style.color = 'var(--text-2)';
     try {
       // Fuerza el popup para validar client_id + orígenes autorizados.
-      const { requestAccessTokenTest } = await import('../services/drive.js?v=20260711g');
+      const { requestAccessTokenTest } = await import('../services/drive.js?v=20260711h');
       await requestAccessTokenTest(v);
       testOut.textContent = '✓ Acceso concedido'; testOut.style.color = 'var(--ok)';
     } catch (err) {

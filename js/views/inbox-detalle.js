@@ -1,18 +1,19 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711g';
-import { renderShell } from './shell.js?v=20260711g';
-import { state, setState } from '../state/store.js?v=20260711g';
+import { h, toast, modal } from '../util/dom.js?v=20260711h';
+import { renderShell } from './shell.js?v=20260711h';
+import { state, setState } from '../state/store.js?v=20260711h';
 import {
   getObraMetaLegacy, getBuzonItem, updateBuzonItem,
   getRequisicionMateriales,
   loadCatalogoConceptos, loadCatalogoMateriales,
   listOC, listCotizaciones, calcularCoberturaReq,
-  buildPreciosPorProveedorObra, analizarReqVsProveedores
-} from '../services/db.js?v=20260711g';
-import { emitirOC } from '../services/oc-emit.js?v=20260711g';
-import { navigate } from '../state/router.js?v=20260711g';
-import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260711g';
-import { estadoCotBadge } from './cotizaciones.js?v=20260711g';
-import { estadoBuzonBadge } from './inbox.js?v=20260711g';
+  buildPreciosPorProveedorObra, analizarReqVsProveedores,
+  aplicarReemplazosRequisicion
+} from '../services/db.js?v=20260711h';
+import { emitirOC } from '../services/oc-emit.js?v=20260711h';
+import { navigate } from '../state/router.js?v=20260711h';
+import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260711h';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711h';
+import { estadoBuzonBadge } from './inbox.js?v=20260711h';
 
 // Detalle de una requisición que llegó al inbox de compras (item del buzón
 // con tipo='requisicion_materiales'). Acciones del comprador:
@@ -191,14 +192,130 @@ function renderTableroCotizaciones(obraId, buzonId, buzonItem, cotsDeReq, materi
     }))
   ]);
 
+  // Materiales ad-hoc que aparecen en las cotizaciones pero NO están en la
+  // requisición (ej. la lámina de 4m que reemplazó a la de 5m). Ofrecemos
+  // aplicar el cambio a la requisición para que todo cuadre.
+  const adhocNuevos = adhocNoEnRequisicion(buzonItem, cotsDeReq);
+  const ajusteBar = adhocNuevos.length > 0
+    ? h('div', { style: { margin: '0 18px 8px', padding: '10px 14px', background: 'rgba(245, 196, 81, 0.08)', border: '1px solid rgba(245, 196, 81, 0.35)', borderRadius: '6px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } }, [
+      h('div', { style: { flex: 1, fontSize: '12px', color: 'var(--text-1)' } }, [
+        h('b', {}, `${adhocNuevos.length} material${adhocNuevos.length === 1 ? '' : 'es'} ad-hoc`),
+        ' de las cotizaciones no está', adhocNuevos.length === 1 ? '' : 'n', ' en la requisición ',
+        h('span', { class: 'muted' }, '(ej. una medida distinta que reemplazó a la pedida). Puedes aplicar el cambio a la requisición para que el reparto y la OC cuadren.')
+      ]),
+      h('button', {
+        class: 'btn sm primary',
+        onClick: () => ajustarRequisicionDialog(obraId, buzonId, buzonItem, cotsDeReq, adhocNuevos, materiales, conceptos)
+      }, '🔧 Ajustar requisición')
+    ])
+    : null;
+
   // Comparativa material × proveedor con las cotizaciones capturadas
   const comparativa = renderComparativaCotizaciones(obraId, buzonId, cotsDeReq, materiales, cobertura);
 
   return h('div', { class: 'card', style: { padding: 0 } }, [
     head,
     h('div', { style: { padding: '10px 0' } }, lista),
+    ajusteBar,
     comparativa
   ]);
+}
+
+// Materiales ad-hoc (creados en compras) presentes en las cotizaciones cuyo
+// materialKey no está en la requisición → candidatos a "aplicar a la req".
+function adhocNoEnRequisicion(buzonItem, cotsDeReq) {
+  const reqKeys = new Set(Object.values(buzonItem.items || {}).map(it => it.materialKey).filter(Boolean));
+  const found = new Map();
+  for (const [, c] of cotsDeReq) {
+    for (const it of Object.values(c.items || {})) {
+      if (it.origen !== 'ad_hoc_compras') continue;
+      if (!it.materialKey || reqKeys.has(it.materialKey)) continue;
+      if (!found.has(it.materialKey)) {
+        found.set(it.materialKey, {
+          materialKey: it.materialKey,
+          clave: it.clave || '',
+          descripcion: it.descripcion || '',
+          unidad: it.unidad || 'PZA',
+          conceptoKey: it.conceptoKey || null
+        });
+      }
+    }
+  }
+  return [...found.values()];
+}
+
+// Modal para mapear cada material ad-hoc nuevo a la línea de la requisición que
+// reemplaza (misma cantidad y concepto). Aplica en la copia de compras y en el
+// registro vivo de almacén, y registra el material en el catálogo.
+function ajustarRequisicionDialog(obraId, buzonId, buzonItem, cotsDeReq, adhocNuevos, materiales, conceptos) {
+  // Materiales de la req que NO tienen oferta en ninguna cotización (candidatos
+  // naturales a haber sido reemplazados).
+  const conOferta = new Set();
+  for (const [, c] of cotsDeReq) {
+    for (const it of Object.values(c.items || {})) {
+      if ((Number(it.costoUnitario) || 0) > 0 && it.materialKey) conOferta.add(it.materialKey);
+    }
+  }
+  const reqEntries = Object.entries(buzonItem.items || {});
+  const reqLabel = (it) => {
+    const m = materiales[it.materialKey] || {};
+    const cn = it.conceptoKey ? conceptos[it.conceptoKey] : null;
+    return `${m.descripcion || it.materialKey} · ${cn ? cn.clave : 's/concepto'} · ${num(it.cantidad, 2)} ${m.unidad || ''}`.trim();
+  };
+
+  const filas = adhocNuevos.map(a => {
+    const sel = h('select', {}, [
+      h('option', { value: '' }, '— no aplicar —'),
+      ...reqEntries.map(([rid, it]) =>
+        h('option', { value: rid }, `${reqEntries.length > 1 ? '' : ''}${reqLabel(it)}${conOferta.has(it.materialKey) ? '' : '  (sin ofertas)'}`))
+    ]);
+    // Sugerencia: única línea de req con el mismo concepto y sin ofertas.
+    const candidatos = reqEntries.filter(([, it]) =>
+      it.conceptoKey === a.conceptoKey && !conOferta.has(it.materialKey));
+    if (candidatos.length === 1) sel.value = candidatos[0][0];
+    return { a, sel };
+  });
+
+  modal({
+    title: 'Ajustar requisición con los cambios de la cotización',
+    size: 'lg',
+    body: h('div', {}, [
+      h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } },
+        'Elige a qué línea de la requisición reemplaza cada material nuevo. La línea conserva su cantidad y concepto; solo cambia el material (ej. lámina 5m → 4m). Se aplica en compras y en el registro de almacén.'),
+      ...filas.map(({ a, sel }) => h('div', { class: 'field', style: { borderTop: '1px solid var(--border)', paddingTop: '10px' } }, [
+        h('label', {}, [
+          h('span', { class: 'mono', style: { fontSize: '11px', color: 'var(--text-2)' } }, a.clave || a.materialKey.slice(0, 10)),
+          ' ', h('b', {}, a.descripcion || '(sin descripción)')
+        ]),
+        h('div', { class: 'muted', style: { fontSize: '11px', margin: '2px 0 6px' } }, 'Reemplaza a la línea de la requisición:'),
+        sel
+      ]))
+    ]),
+    confirmLabel: 'Aplicar a la requisición',
+    onConfirm: async () => {
+      const replacements = filas
+        .filter(({ sel }) => sel.value)
+        .map(({ a, sel }) => ({
+          reqItemId: sel.value,
+          nuevoMaterialKey: a.materialKey,
+          material: { clave: a.clave, descripcion: a.descripcion, unidad: a.unidad }
+        }));
+      if (replacements.length === 0) { toast('No asignaste ningún reemplazo', 'danger'); return false; }
+      // No permitir dos ad-hoc apuntando a la misma línea.
+      const dests = replacements.map(r => r.reqItemId);
+      if (new Set(dests).size !== dests.length) { toast('Dos materiales apuntan a la misma línea de la requisición', 'danger'); return false; }
+      try {
+        await aplicarReemplazosRequisicion(obraId, buzonId, replacements, actorPayload());
+        toast(`Requisición ajustada (${replacements.length} reemplazo${replacements.length === 1 ? '' : 's'})`, 'ok');
+        renderInboxDetalle({ params: { id: obraId, buzonid: buzonId } });
+        return true;
+      } catch (err) {
+        console.error('[ajustarRequisicion]', err);
+        toast('Error: ' + err.message, 'danger');
+        return false;
+      }
+    }
+  });
 }
 
 // Matriz: filas = materiales pendientes; columnas = cotizaciones; celda =

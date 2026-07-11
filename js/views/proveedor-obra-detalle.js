@@ -1,15 +1,15 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711g';
-import { renderShell } from './shell.js?v=20260711g';
-import { state, setState } from '../state/store.js?v=20260711g';
+import { h, toast, modal } from '../util/dom.js?v=20260711h';
+import { renderShell } from './shell.js?v=20260711h';
+import { state, setState } from '../state/store.js?v=20260711h';
 import {
   getObraMetaLegacy, getProveedorObra, updateProveedorObra,
   loadCatalogoMateriales, loadCatalogoConceptos,
   listCotizaciones, listOC,
   listProveedoresGlobal, updateProveedorGlobal,
   mergeProveedorObraConGlobal
-} from '../services/db.js?v=20260711g';
-import { navigate } from '../state/router.js?v=20260711g';
-import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260711g';
+} from '../services/db.js?v=20260711h';
+import { navigate } from '../state/router.js?v=20260711h';
+import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260711h';
 
 // Detalle de un proveedor en el contexto de una obra. Incluye:
 //   - Datos del proveedor (editable, sincroniza solo en obra; el global es

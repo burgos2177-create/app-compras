@@ -1,8 +1,8 @@
 import {
   ref, get, set, update, push, remove, onValue, off
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js';
-import { db } from './firebase.js?v=20260711g';
-import { APP_BASE_PATH } from '../config/firebase-config.js?v=20260711g';
+import { db } from './firebase.js?v=20260711h';
+import { APP_BASE_PATH } from '../config/firebase-config.js?v=20260711h';
 
 // Prefija toda path relativa con APP_BASE_PATH. Para escapes (rutas absolutas
 // como /legacy/estimaciones/users, /shared/catalogos, /shared/materiales,
@@ -399,6 +399,70 @@ export async function createMaterialAdHocDesdeCompras(obraId, materialKey, data,
   };
   await rset(`/shared/materiales/obras/${obraId}/catalogo/items/${materialKey}`, item);
   return item;
+}
+
+// Aplica a la requisición los reemplazos de material ad-hoc decididos en una
+// cotización (ej. lámina 5m → 4m). Para cada reemplazo:
+//  - registra el material nuevo en el catálogo (ad_hoc_compras),
+//  - cambia el materialKey de esa línea de la requisición conservando cantidad
+//    y concepto, tanto en la copia del buzón (lo que usa el tablero de compras)
+//    como en el registro vivo de almacén,
+//  - deja un registro de auditoría en `ajustesCompras`.
+// replacements: [{ reqItemId, nuevoMaterialKey, material: { clave, descripcion, unidad } }]
+export async function aplicarReemplazosRequisicion(obraId, reqBuzonId, replacements, autor) {
+  if (!Array.isArray(replacements) || replacements.length === 0) return { aplicados: 0 };
+
+  // 1. Registrar los materiales nuevos en el catálogo (para que el tablero y la
+  //    OC resuelvan su descripción y el materialKey sea "real").
+  for (const r of replacements) {
+    await createMaterialAdHocDesdeCompras(obraId, r.nuevoMaterialKey, {
+      clave: r.material?.clave || '',
+      descripcion: r.material?.descripcion || '',
+      unidad: r.material?.unidad || 'PZA'
+    }, autor);
+  }
+
+  const stamp = Date.now();
+  const buildAudit = (items) => replacements
+    .filter(r => items && items[r.reqItemId])
+    .map(r => ({
+      reqItemId: r.reqItemId,
+      deMaterial: items[r.reqItemId].materialKey || null,
+      aMaterial: r.nuevoMaterialKey,
+      aDescripcion: r.material?.descripcion || '',
+      por: autor || null, at: stamp
+    }));
+  const aplicar = (items) => {
+    const out = { ...(items || {}) };
+    for (const r of replacements) {
+      if (!out[r.reqItemId]) continue;
+      out[r.reqItemId] = { ...out[r.reqItemId], materialKey: r.nuevoMaterialKey };
+    }
+    return out;
+  };
+
+  // 2. Copia del buzón (fuente que usa el tablero de compras).
+  const buzonItem = await getBuzonItem(reqBuzonId);
+  if (buzonItem && buzonItem.items) {
+    await updateBuzonItem(reqBuzonId, {
+      items: aplicar(buzonItem.items),
+      ajustesCompras: [...(buzonItem.ajustesCompras || []), ...buildAudit(buzonItem.items)]
+    });
+  }
+
+  // 3. Registro vivo de la requisición en almacén.
+  if (buzonItem?.reqId) {
+    const reqViva = await rread(`/shared/materiales/obras/${obraId}/requisiciones/${buzonItem.reqId}`);
+    if (reqViva && reqViva.items) {
+      await rupdate(`/shared/materiales/obras/${obraId}/requisiciones/${buzonItem.reqId}`, {
+        items: aplicar(reqViva.items),
+        ajustesCompras: [...(reqViva.ajustesCompras || []), ...buildAudit(reqViva.items)],
+        updatedAt: stamp
+      });
+    }
+  }
+
+  return { aplicados: replacements.length };
 }
 
 // === Cotizaciones (esta app es escritor único, MVP) ===
