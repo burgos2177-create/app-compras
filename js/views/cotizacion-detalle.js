@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711f';
-import { renderShell } from './shell.js?v=20260711f';
-import { state, setState } from '../state/store.js?v=20260711f';
+import { h, toast, modal } from '../util/dom.js?v=20260711g';
+import { renderShell } from './shell.js?v=20260711g';
+import { state, setState } from '../state/store.js?v=20260711g';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
@@ -11,13 +11,13 @@ import {
   pushBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq,
   buildPreciosPorProveedorObra
-} from '../services/db.js?v=20260711f';
-import { navigate } from '../state/router.js?v=20260711f';
-import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711f';
-import { deriveTotales } from '../services/totales.js?v=20260711f';
-import { emitirOC } from '../services/oc-emit.js?v=20260711f';
-import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711f';
-import { estadoCotBadge } from './cotizaciones.js?v=20260711f';
+} from '../services/db.js?v=20260711g';
+import { navigate } from '../state/router.js?v=20260711g';
+import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711g';
+import { deriveTotales } from '../services/totales.js?v=20260711g';
+import { emitirOC } from '../services/oc-emit.js?v=20260711g';
+import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711g';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711g';
 
 // Captura/edita una cotización contra una requisición aprobada y emite la OC.
 //
@@ -823,7 +823,7 @@ async function emitirOCFromCotizacion(ctx) {
 // === Helpers ===
 
 function addItemDialog(ctx, softAddItem) {
-  const { materiales } = ctx;
+  const { materiales, conceptos = {}, cot } = ctx;
   const materialList = Object.entries(materiales)
     .sort((a, b) => (a[1].descripcion || '').localeCompare(b[1].descripcion || ''))
     .slice(0, 500);
@@ -839,6 +839,37 @@ function addItemDialog(ctx, softAddItem) {
   const cantidad = h('input', { type: 'number', step: '0.01', min: '0', value: '1' });
   const costo = h('input', { type: 'number', step: '0.01', min: '0', value: '0' });
 
+  // Concepto OPUS destino (para conservar la trazabilidad a contabilidad).
+  const conceptoEntries = Object.entries(conceptos)
+    .sort((a, b) => (a[1].clave || '').localeCompare(b[1].clave || ''));
+  const conceptoSelect = h('select', {}, [
+    h('option', { value: '' }, '— sin concepto —'),
+    ...conceptoEntries.map(([k, c]) =>
+      h('option', { value: k }, `${c.clave} · ${(c.descripcion || '').slice(0, 44)}`))
+  ]);
+
+  // "Basar en" un item ya en la cotización: clona clave/desc/unidad/concepto/costo
+  // para armar una VARIANTE (ej. la misma lámina pero de otra medida). Solo
+  // cambias la descripción y queda ligada al mismo concepto → cuadra la OC.
+  const cloneEntries = Object.entries(cot?.items || {});
+  const cloneSelect = h('select', {}, [
+    h('option', { value: '' }, '— (opcional) basar en un item ya en la cotización —'),
+    ...cloneEntries.map(([id, it]) =>
+      h('option', { value: id }, `${it.clave ? it.clave + ' · ' : ''}${(it.descripcion || '').slice(0, 50)}`))
+  ]);
+  cloneSelect.addEventListener('change', () => {
+    const it = cot?.items?.[cloneSelect.value];
+    if (!it) return;
+    matSelect.value = '';                 // rama ad-hoc, para poder editar el nombre
+    adHocClave.value = it.clave || '';
+    adHocDesc.value = it.descripcion || '';
+    adHocUnidad.value = it.unidad || '';
+    if (it.costoUnitario) costo.value = String(it.costoUnitario);
+    conceptoSelect.value = it.conceptoKey || '';
+    adHocDesc.focus();
+    adHocDesc.select && adHocDesc.select();
+  });
+
   modal({
     title: 'Agregar item a la cotización',
     body: h('div', {}, [
@@ -848,6 +879,10 @@ function addItemDialog(ctx, softAddItem) {
         h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
           `Mostrando ${materialList.length} de ${Object.keys(materiales).length}`)
       ]),
+      cloneEntries.length > 0 && h('div', { class: 'field' }, [
+        h('label', {}, '…o basar en un item ya en la cotización (para variantes, ej. otra medida)'),
+        cloneSelect
+      ]),
       h('div', { style: { borderTop: '1px solid var(--border)', margin: '12px 0', textAlign: 'center' } },
         h('span', { class: 'muted', style: { fontSize: '11px', position: 'relative', top: '-9px', background: 'var(--bg-1)', padding: '0 8px' } }, 'O ad-hoc compras')),
       h('div', { class: 'grid-2' }, [
@@ -855,6 +890,12 @@ function addItemDialog(ctx, softAddItem) {
         h('div', { class: 'field' }, [h('label', {}, 'Unidad'), adHocUnidad])
       ]),
       h('div', { class: 'field' }, [h('label', {}, 'Descripción'), adHocDesc]),
+      h('div', { class: 'field' }, [
+        h('label', {}, 'Concepto OPUS (destino)'),
+        conceptoSelect,
+        h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
+          'Para que el item cuadre en la trazabilidad hacia contabilidad. Si lo basas en otro item, hereda su concepto.')
+      ]),
       h('div', { class: 'grid-2' }, [
         h('div', { class: 'field' }, [h('label', {}, 'Cantidad'), cantidad]),
         h('div', { class: 'field' }, [h('label', {}, 'Costo unitario'), costo])
@@ -865,6 +906,7 @@ function addItemDialog(ctx, softAddItem) {
       const cant = Number(cantidad.value) || 0;
       const cost = Number(costo.value) || 0;
       if (cant <= 0) { toast('Cantidad inválida', 'danger'); return false; }
+      const conceptoKey = conceptoSelect.value || null;
       let item;
       if (matSelect.value) {
         const m = materiales[matSelect.value];
@@ -872,7 +914,7 @@ function addItemDialog(ctx, softAddItem) {
           materialKey: matSelect.value,
           clave: m.clave, descripcion: m.descripcion, unidad: m.unidad,
           cantidad: cant, costoUnitario: cost,
-          conceptoKey: null,
+          conceptoKey,
           origen: m.origen || 'opus',
           notas: ''
         };
@@ -880,12 +922,12 @@ function addItemDialog(ctx, softAddItem) {
         const desc = adHocDesc.value.trim();
         if (!desc) { toast('Captura una descripción', 'danger'); return false; }
         item = {
-          materialKey: 'adhoc_' + Date.now().toString(36),
+          materialKey: 'adhoc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
           clave: adHocClave.value.trim(),
           descripcion: desc,
           unidad: adHocUnidad.value.trim() || 'PZA',
           cantidad: cant, costoUnitario: cost,
-          conceptoKey: null,
+          conceptoKey,
           origen: 'ad_hoc_compras',
           notas: ''
         };

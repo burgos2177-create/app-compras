@@ -15,7 +15,7 @@
 //   generadoAt
 // }
 
-import { getLogoDataURL, drawPdfBrandHeader } from './brand.js?v=20260711f';
+import { getLogoDataURL, drawPdfBrandHeader } from './brand.js?v=20260711g';
 
 const BRAND = { r: 32, g: 33, b: 86 };   // navy SOGRUB (encabezados de tabla / cajas)
 
