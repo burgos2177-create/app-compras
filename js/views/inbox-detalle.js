@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711k';
-import { renderShell } from './shell.js?v=20260711k';
-import { state, setState } from '../state/store.js?v=20260711k';
+import { h, toast, modal } from '../util/dom.js?v=20260711l';
+import { renderShell } from './shell.js?v=20260711l';
+import { state, setState } from '../state/store.js?v=20260711l';
 import {
   getObraMetaLegacy, getBuzonItem, updateBuzonItem,
   getRequisicionMateriales,
@@ -8,12 +8,12 @@ import {
   listOC, listCotizaciones, calcularCoberturaReq,
   buildPreciosPorProveedorObra, analizarReqVsProveedores,
   aplicarReemplazosRequisicion
-} from '../services/db.js?v=20260711k';
-import { emitirOC } from '../services/oc-emit.js?v=20260711k';
-import { navigate } from '../state/router.js?v=20260711k';
-import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260711k';
-import { estadoCotBadge } from './cotizaciones.js?v=20260711k';
-import { estadoBuzonBadge } from './inbox.js?v=20260711k';
+} from '../services/db.js?v=20260711l';
+import { emitirOC } from '../services/oc-emit.js?v=20260711l';
+import { navigate } from '../state/router.js?v=20260711l';
+import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260711l';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711l';
+import { estadoBuzonBadge } from './inbox.js?v=20260711l';
 
 // Detalle de una requisición que llegó al inbox de compras (item del buzón
 // con tipo='requisicion_materiales'). Acciones del comprador:
@@ -481,6 +481,7 @@ async function emitirPorReparto(obraId, buzonId, resumen, seleccion, matKeys) {
             reqIds: [buzonId],
             proveedor: g.c.proveedor,
             items: g.items,
+            causaIva: g.c.causaIva !== false,
             incluyeIva: !!g.c.incluyeIva,
             ivaPct: g.c.ivaPct ?? 0.16,
             retenciones: g.c.retenciones || [],
@@ -524,6 +525,7 @@ async function emitirCotizacionCompleta(obraId, buzonId, cotId, c) {
           reqIds: c.reqIds && c.reqIds.length ? c.reqIds : [buzonId],
           proveedor: c.proveedor,
           items: c.items,
+          causaIva: c.causaIva !== false,
           incluyeIva: !!c.incluyeIva,
           ivaPct: c.ivaPct ?? 0.16,
           retenciones: c.retenciones || [],

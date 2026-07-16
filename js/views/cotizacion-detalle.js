@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711k';
-import { renderShell } from './shell.js?v=20260711k';
-import { state, setState } from '../state/store.js?v=20260711k';
+import { h, toast, modal } from '../util/dom.js?v=20260711l';
+import { renderShell } from './shell.js?v=20260711l';
+import { state, setState } from '../state/store.js?v=20260711l';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
@@ -11,13 +11,13 @@ import {
   pushBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq,
   buildPreciosPorProveedorObra
-} from '../services/db.js?v=20260711k';
-import { navigate } from '../state/router.js?v=20260711k';
-import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711k';
-import { deriveTotales } from '../services/totales.js?v=20260711k';
-import { emitirOC } from '../services/oc-emit.js?v=20260711k';
-import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711k';
-import { estadoCotBadge } from './cotizaciones.js?v=20260711k';
+} from '../services/db.js?v=20260711l';
+import { navigate } from '../state/router.js?v=20260711l';
+import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711l';
+import { deriveTotales } from '../services/totales.js?v=20260711l';
+import { emitirOC } from '../services/oc-emit.js?v=20260711l';
+import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711l';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711l';
 
 // Captura/edita una cotización contra una requisición aprobada y emite la OC.
 //
@@ -172,6 +172,7 @@ export async function renderCotizacionDetalle({ params, query }) {
       fechaCotizacion: Date.now(),
       vigenciaDias: 15,
       items: seedItems,
+      causaIva: true,
       incluyeIva: true,
       ivaPct: 0.16,
       retenciones: [],
@@ -253,12 +254,25 @@ function renderEditor(ctx) {
   const condInput = h('input', { value: cot.condicionesPago || '' });
   condInput.addEventListener('input', () => { cot.condicionesPago = condInput.value; });
 
+  // Eje 1: ¿la compra causa IVA? (sin IVA = el costo pasa tal cual).
+  const causaIvaToggle = h('input', { type: 'checkbox', checked: cot.causaIva !== false });
+  // Eje 2: ¿el costo capturado ya incluye IVA? (solo aplica si causa IVA).
   const ivaToggle = h('input', { type: 'checkbox', checked: !!cot.incluyeIva });
+  const ivaPctInput = h('input', { type: 'number', step: '0.01', min: '0', max: '0.5', value: String(cot.ivaPct ?? 0.16) });
+  const syncIvaControls = () => {
+    const con = cot.causaIva !== false;
+    ivaToggle.disabled = !con || readonly;
+    ivaPctInput.disabled = !con || readonly;
+  };
+  causaIvaToggle.addEventListener('change', () => {
+    cot.causaIva = causaIvaToggle.checked;
+    syncIvaControls();
+    softRecomputeTotales();
+  });
   ivaToggle.addEventListener('change', () => {
     cot.incluyeIva = ivaToggle.checked;
     softRecomputeTotales();
   });
-  const ivaPctInput = h('input', { type: 'number', step: '0.01', min: '0', max: '0.5', value: String(cot.ivaPct ?? 0.16) });
   ivaPctInput.addEventListener('input', () => {
     const v = Number(ivaPctInput.value);
     if (Number.isFinite(v)) { cot.ivaPct = v; softRecomputeTotales(); }
@@ -269,8 +283,9 @@ function renderEditor(ctx) {
   const editable = !cot.estado || ['borrador', 'recibida'].includes(cot.estado);
   const readonly = !editable;
   if (readonly) {
-    [provSelect, provNombre, fechaInput, vigenciaInput, condInput, ivaToggle, ivaPctInput, comentariosArea].forEach(el => el.disabled = true);
+    [provSelect, provNombre, fechaInput, vigenciaInput, condInput, causaIvaToggle, ivaToggle, ivaPctInput, comentariosArea].forEach(el => el.disabled = true);
   }
+  syncIvaControls();
 
   // === Funciones de soft refresh ===
   const itemsCtx = { cot, materiales, conceptos, editable };
@@ -367,11 +382,14 @@ function renderEditor(ctx) {
       h('div', { class: 'field' }, [h('label', {}, 'Condiciones de pago'), condInput]),
       h('div', { class: 'field' }, [
         h('label', {}, 'IVA'),
-        h('div', { class: 'row' }, [
-          h('label', { class: 'row', style: { gap: '6px' } }, [ivaToggle, h('span', {}, 'Costos incluyen IVA')]),
-          h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Tasa:'),
+        h('label', { class: 'row', style: { gap: '6px' } }, [causaIvaToggle, h('span', {}, 'Esta compra causa IVA')]),
+        h('div', { class: 'row', style: { gap: '6px', marginTop: '6px' } }, [
+          h('label', { class: 'row', style: { gap: '6px' } }, [ivaToggle, h('span', {}, 'El costo capturado ya incluye IVA')]),
+          h('span', { class: 'muted', style: { fontSize: '12px', marginLeft: '4px' } }, 'Tasa:'),
           ivaPctInput
-        ])
+        ]),
+        h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
+          'Sin IVA: el costo pasa tal cual (subtotal = total). Con IVA: si ya lo incluye se extrae; si es neto se agrega. El presupuesto siempre compara con subtotales.')
       ])
     ]),
     h('div', { class: 'field', style: { marginTop: '10px' } },
@@ -641,6 +659,11 @@ function groupSubRow(ctx, refs, handlers, itemId, it) {
 
 // === Totales card content (replaceable) ===
 
+function regimenIvaLabel(cot) {
+  if (cot.causaIva === false) return 'Sin IVA (costo pasa tal cual)';
+  return cot.incluyeIva ? 'Con IVA — el costo ya lo incluye (se extrae)' : 'Con IVA — costo neto (se agrega)';
+}
+
 function renderTotalesCardContent(cot) {
   const t = deriveTotales(cot);
   return h('div', {}, [
@@ -652,7 +675,7 @@ function renderTotalesCardContent(cot) {
     h('div', { class: 'grid-3', style: { marginTop: '8px' } }, [
       kv('Retenciones', money(t.retencionesTotal)),
       kv('Total', h('b', { style: { fontSize: '20px', color: 'var(--accent)' } }, money(t.total))),
-      kv('Régimen IVA', cot.incluyeIva ? 'Costos brutos' : 'Costos sin IVA')
+      kv('Régimen IVA', regimenIvaLabel(cot))
     ])
   ]);
 }
@@ -809,6 +832,7 @@ async function emitirOCFromCotizacion(ctx) {
     reqIds: cot.reqIds || [],
     proveedor: cot.proveedor,
     items: cot.items,
+    causaIva: cot.causaIva !== false,
     incluyeIva: !!cot.incluyeIva,
     ivaPct: cot.ivaPct ?? 0.16,
     retenciones: cot.retenciones || [],

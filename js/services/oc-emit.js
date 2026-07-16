@@ -11,9 +11,9 @@ import {
   updateCotizacion,
   pushBuzonItem, getBuzonItem, updateBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq
-} from './db.js?v=20260711k';
-import { deriveTotales } from './totales.js?v=20260711k';
-import { ocFolio } from '../util/format.js?v=20260711k';
+} from './db.js?v=20260711l';
+import { deriveTotales } from './totales.js?v=20260711l';
+import { ocFolio } from '../util/format.js?v=20260711l';
 
 // Emite UNA OC a un proveedor con un conjunto de items.
 //
@@ -37,6 +37,7 @@ export async function emitirOC(obraId, params) {
     reqIds = [],
     proveedor,
     items,
+    causaIva = true,
     incluyeIva = true,
     ivaPct = 0.16,
     retenciones = [],
@@ -47,7 +48,12 @@ export async function emitirOC(obraId, params) {
     autor
   } = params;
 
-  const totales = deriveTotales({ items, incluyeIva, ivaPct, retenciones });
+  const totales = deriveTotales({ items, incluyeIva, ivaPct, retenciones, causaIva });
+  // Tasa efectiva almacenada: 0 si la compra es sin IVA.
+  const ivaPctEff = causaIva ? (ivaPct ?? 0.16) : 0;
+  // Para el desglose por concepto (siempre en subtotal): solo se descuenta IVA
+  // cuando causa IVA y el costo ya lo incluye.
+  const factorSinIva = (causaIva && incluyeIva) ? 1 / (1 + (ivaPct ?? 0.16)) : 1;
 
   // 1. Crear OC
   const ocPayload = {
@@ -58,8 +64,9 @@ export async function emitirOC(obraId, params) {
     fechaEntregaEstimada: null,
     condicionesPago: condicionesPago || '',
     items,
+    causaIva: !!causaIva,
     incluyeIva: !!incluyeIva,
-    ivaPct: ivaPct ?? 0.16,
+    ivaPct: ivaPctEff,
     importeBruto: totales.importeBruto,
     subtotal: totales.subtotal,
     ivaImporte: totales.ivaImporte,
@@ -82,9 +89,7 @@ export async function emitirOC(obraId, params) {
       conceptoKey: it.conceptoKey,
       conceptoClave: it.clave || '',
       conceptoDescripcion: it.descripcion || '',
-      monto: ((Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0)) * (incluyeIva
-        ? 1 / (1 + (ivaPct ?? 0.16))
-        : 1)
+      monto: ((Number(it.cantidad) || 0) * (Number(it.costoUnitario) || 0)) * factorSinIva
     }));
 
   // 3. Push al buzón (contrato con contabilidad)
@@ -112,8 +117,9 @@ export async function emitirOC(obraId, params) {
       origen: it.origen || 'opus',
       notas: it.notas || ''
     })),
+    causaIva: !!causaIva,
     incluyeIva: !!incluyeIva,
-    ivaPct: ivaPct ?? 0.16,
+    ivaPct: ivaPctEff,
     importeBruto: totales.importeBruto,
     subtotal: totales.subtotal,
     ivaImporte: totales.ivaImporte,

@@ -20,12 +20,22 @@ export function calcSubtotalItems(items) {
   }, 0);
 }
 
-// Cuando incluyeIva=true, "subtotal de items" ya trae IVA. Para reportar
-// limpiamente, derivamos el subtotal sin IVA: bruto / (1 + ivaPct).
-export function deriveTotales({ items, incluyeIva = true, ivaPct = 0.16, retenciones = [] }) {
+// Flujo de decisión del IVA (dos ejes independientes):
+//   causaIva=false → compra SIN IVA: el costo pasa tal cual. subtotal = total,
+//                    IVA = 0. (Proveedor que acepta compra sin IVA.)
+//   causaIva=true  → compra CON IVA:
+//       incluyeIva=true  → el costo capturado YA incluye IVA → se extrae:
+//                          subtotal = bruto/(1+iva), IVA = bruto − subtotal.
+//       incluyeIva=false → el costo es NETO → se agrega: IVA = subtotal×iva.
+// Para el libro contable / presupuesto siempre se compara con SUBTOTALES.
+export function deriveTotales({ items, incluyeIva = true, ivaPct = 0.16, retenciones = [], causaIva = true }) {
   const importeBruto = calcSubtotalItems(items); // Σ cantidad × costoUnitario
+  const tasa = causaIva ? ivaPct : 0;
   let subtotal, ivaImporte;
-  if (incluyeIva) {
+  if (!causaIva) {
+    subtotal = importeBruto;   // el costo pasa tal cual
+    ivaImporte = 0;
+  } else if (incluyeIva) {
     subtotal = importeBruto / (1 + ivaPct);
     ivaImporte = importeBruto - subtotal;
   } else {
@@ -43,8 +53,9 @@ export function deriveTotales({ items, incluyeIva = true, ivaPct = 0.16, retenci
   return {
     importeBruto,
     subtotal,
-    ivaPct,
+    ivaPct: tasa,
     ivaImporte,
+    causaIva: !!causaIva,
     retenciones: retencionesAplicadas,
     retencionesTotal,
     total

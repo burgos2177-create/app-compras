@@ -4,7 +4,7 @@
 // Incluye una leyenda amable solicitando la emisión de la factura (CFDI) con los
 // datos fiscales de SOGRUB (configurables en la vista de OC).
 
-import { getLogoDataURL, drawPdfBrandHeader, brandHeaderHTML } from './brand.js?v=20260711k';
+import { getLogoDataURL, drawPdfBrandHeader, brandHeaderHTML } from './brand.js?v=20260711l';
 
 const BRAND = { r: 40, g: 50, b: 65 };
 
@@ -105,7 +105,8 @@ export async function exportOcPdf(obra, oc, factur = {}) {
     doc.text(label, lx, ty); doc.text(val, rx, ty, { align: 'right' }); ty += strong ? 18 : 15;
   };
   line('Subtotal', money(oc.subtotal));
-  line(`IVA (${((oc.ivaPct ?? 0.16) * 100).toFixed(0)}%)`, money(oc.ivaImporte));
+  if (oc.causaIva !== false) line(`IVA (${((oc.ivaPct ?? 0.16) * 100).toFixed(0)}%)`, money(oc.ivaImporte));
+  else line('IVA', 'No aplica');
   for (const r of retArr(oc)) line(`Ret. ${r.label}`, '- ' + money(r.importe));
   // Separador con holgura para que NO se encime con el texto del TOTAL.
   ty += 4;
@@ -191,7 +192,9 @@ export async function exportOcDoc(obra, oc, factur = {}) {
 
   const totRows = [
     ['Subtotal', money(oc.subtotal)],
-    [`IVA (${((oc.ivaPct ?? 0.16) * 100).toFixed(0)}%)`, money(oc.ivaImporte)],
+    (oc.causaIva !== false)
+      ? [`IVA (${((oc.ivaPct ?? 0.16) * 100).toFixed(0)}%)`, money(oc.ivaImporte)]
+      : ['IVA', 'No aplica'],
     ...retArr(oc).map(r => [`Ret. ${esc(r.label)}`, '- ' + money(r.importe)])
   ].map(([k, v]) => `<tr><td style="text-align:right;color:#555">${k}</td><td style="text-align:right;width:120px">${v}</td></tr>`).join('');
 
