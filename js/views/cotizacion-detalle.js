@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711l';
-import { renderShell } from './shell.js?v=20260711l';
-import { state, setState } from '../state/store.js?v=20260711l';
+import { h, toast, modal } from '../util/dom.js?v=20260711m';
+import { renderShell } from './shell.js?v=20260711m';
+import { state, setState } from '../state/store.js?v=20260711m';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
@@ -11,13 +11,13 @@ import {
   pushBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq,
   buildPreciosPorProveedorObra
-} from '../services/db.js?v=20260711l';
-import { navigate } from '../state/router.js?v=20260711l';
-import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711l';
-import { deriveTotales } from '../services/totales.js?v=20260711l';
-import { emitirOC } from '../services/oc-emit.js?v=20260711l';
-import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711l';
-import { estadoCotBadge } from './cotizaciones.js?v=20260711l';
+} from '../services/db.js?v=20260711m';
+import { navigate } from '../state/router.js?v=20260711m';
+import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711m';
+import { deriveTotales } from '../services/totales.js?v=20260711m';
+import { emitirOC } from '../services/oc-emit.js?v=20260711m';
+import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711m';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711m';
 
 // Captura/edita una cotización contra una requisición aprobada y emite la OC.
 //
@@ -36,6 +36,7 @@ export async function renderCotizacionDetalle({ params, query }) {
   const obraId = params.id;
   const cotId = params.cotid || null;
   const reqBuzonId = query?.req || null;
+  const fromOcId = query?.fromOc || null;   // clonar desde una OC existente
   // Pre-selección de proveedor (desde la comparativa del inbox).
   const provIdHint = query?.proveedor || null;
   const provNombreHint = query?.proveedorNombre || null;
@@ -69,6 +70,24 @@ export async function renderCotizacionDetalle({ params, query }) {
 
   let cot = existing;
   let cobertura = null;
+
+  // Clonar desde una OC existente (ej. una OC cancelada que estaba bien salvo
+  // que faltaba material): copia proveedor, items (materiales + conceptos
+  // anidados), costos y régimen de IVA a un borrador nuevo.
+  if (!cot && fromOcId) {
+    const srcOc = await getOC(obraId, fromOcId);
+    if (!srcOc) {
+      renderShell(crumbsView(obraId, meta?.nombre, null),
+        h('div', { class: 'empty' }, 'OC de origen no encontrada.'));
+      return;
+    }
+    cot = buildCotDesdeOc(srcOc);
+    const firstReq = (cot.reqIds || [])[0];
+    if (firstReq) {
+      const reqIt = await getBuzonItem(firstReq);
+      if (reqIt) cobertura = calcularCoberturaReq({ ...reqIt, id: firstReq }, ocs);
+    }
+  }
 
   if (!cot) {
     if (!reqItem) {
@@ -658,6 +677,43 @@ function groupSubRow(ctx, refs, handlers, itemId, it) {
 }
 
 // === Totales card content (replaceable) ===
+
+// Construye un borrador de cotización a partir de una OC existente: mismos
+// materiales, conceptos anidados, costos, proveedor y régimen de IVA. Ids de
+// item nuevos (para no colisionar) — la agrupación por material se rearma sola.
+function buildCotDesdeOc(srcOc) {
+  const items = {};
+  let i = 0;
+  for (const it of Object.values(srcOc.items || {})) {
+    const id = 'it_' + Date.now().toString(36) + '_' + (i++) + Math.random().toString(36).slice(2, 5);
+    items[id] = {
+      materialKey: it.materialKey,
+      clave: it.clave || '',
+      descripcion: it.descripcion || '',
+      unidad: it.unidad || '',
+      cantidad: Number(it.cantidad) || 0,
+      costoUnitario: Number(it.costoUnitario) || 0,
+      conceptoKey: it.conceptoKey || null,
+      origen: it.origen || 'opus',
+      notas: it.notas || ''
+    };
+  }
+  const tasa = Number(srcOc.ivaPct) > 0 ? Number(srcOc.ivaPct) : 0.16;
+  return {
+    reqIds: srcOc.reqIds || [],
+    proveedor: { ...(srcOc.proveedor || {}) },
+    fechaCotizacion: Date.now(),
+    vigenciaDias: 15,
+    items,
+    causaIva: srcOc.causaIva !== false,
+    incluyeIva: !!srcOc.incluyeIva,
+    ivaPct: tasa,
+    retenciones: (srcOc.retenciones || []).map(r => ({ concepto: r.concepto, pct: Number(r.pct) || 0 })),
+    condicionesPago: srcOc.condicionesPago || 'Crédito 30 días',
+    comentarios: `Basada en ${ocFolio(srcOc.numero)}${srcOc.estado ? ' (' + srcOc.estado + ')' : ''}.`,
+    estado: 'borrador'
+  };
+}
 
 function regimenIvaLabel(cot) {
   if (cot.causaIva === false) return 'Sin IVA (costo pasa tal cual)';

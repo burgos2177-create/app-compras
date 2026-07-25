@@ -11,9 +11,9 @@ import {
   updateCotizacion,
   pushBuzonItem, getBuzonItem, updateBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq
-} from './db.js?v=20260711l';
-import { deriveTotales } from './totales.js?v=20260711l';
-import { ocFolio } from '../util/format.js?v=20260711l';
+} from './db.js?v=20260711m';
+import { deriveTotales } from './totales.js?v=20260711m';
+import { ocFolio } from '../util/format.js?v=20260711m';
 
 // Emite UNA OC a un proveedor con un conjunto de items.
 //
