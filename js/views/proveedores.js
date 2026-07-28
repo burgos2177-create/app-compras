@@ -1,12 +1,12 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711n';
-import { renderShell } from './shell.js?v=20260711n';
-import { state } from '../state/store.js?v=20260711n';
+import { h, toast, modal } from '../util/dom.js?v=20260711o';
+import { renderShell } from './shell.js?v=20260711o';
+import { state } from '../state/store.js?v=20260711o';
 import {
   listProveedoresGlobal, addProveedorGlobal,
   updateProveedorGlobal, deleteProveedorGlobal,
   getGoogleClientId, setGoogleClientId
-} from '../services/db.js?v=20260711n';
-import { uploadProveedorDoc, gisReady } from '../services/drive.js?v=20260711n';
+} from '../services/db.js?v=20260711o';
+import { uploadProveedorDoc, gisReady, driveTokenValido, ensureDriveToken } from '../services/drive.js?v=20260711o';
 
 // Los navegadores envoltorio (Ferdium/Electron) no completan el popup de OAuth:
 // el token nunca vuelve. Avisamos para que suban desde Chrome/Edge real.
@@ -158,7 +158,7 @@ async function configDriveDialog(current) {
     testBtn.disabled = true; testOut.textContent = 'Abriendo Google…'; testOut.style.color = 'var(--text-2)';
     try {
       // Fuerza el popup para validar client_id + orígenes autorizados.
-      const { requestAccessTokenTest } = await import('../services/drive.js?v=20260711n');
+      const { requestAccessTokenTest } = await import('../services/drive.js?v=20260711o');
       await requestAccessTokenTest(v);
       testOut.textContent = '✓ Acceso concedido'; testOut.style.color = 'var(--ok)';
     } catch (err) {
@@ -212,9 +212,23 @@ function docRow(prov, d, getClasificacion, clientId) {
   }
   refresh();
 
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
     if (!clientId) { toast('Configura primero el Client ID de Drive (⚙ Drive)', 'danger'); return; }
     if (!getClasificacion()) { toast('Elige la clasificación del proveedor antes de subir', 'warn'); return; }
+    // Si no hay token de Drive, autorizamos EN ESTE CLIC (el popup de Google solo
+    // abre bien desde un clic de botón directo). Luego se vuelve a dar clic para
+    // elegir el archivo — ya con token cacheado, la subida no abre popup.
+    if (!driveTokenValido()) {
+      const prev = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Conectando…';
+      try {
+        await ensureDriveToken(clientId);
+        toast('Drive conectado ✓ — vuelve a dar clic para elegir el archivo', 'ok');
+      } catch (err) {
+        toast('Error al conectar Drive: ' + err.message, 'danger');
+      } finally { btn.disabled = false; btn.textContent = prev; }
+      return;
+    }
     fileInput.click();
   });
   fileInput.addEventListener('change', async () => {
@@ -282,13 +296,29 @@ async function editDialog(prov, clientId) {
     ...MEDIOS_PAGO.map(c => h('option', { value: c, selected: (prov?.medioPago || '') === c }, c))
   ]);
 
+  // Botón para conectar Drive una sola vez (el popup de Google abre confiable
+  // desde este clic directo). Tras conectar, las subidas no vuelven a pedir popup.
+  const connectBtn = h('button', { class: 'btn sm', type: 'button' });
+  const setConnLabel = () => { connectBtn.textContent = driveTokenValido() ? '✓ Drive conectado' : '🔗 Conectar Drive'; };
+  setConnLabel();
+  connectBtn.addEventListener('click', async () => {
+    if (!clientId) { toast('Configura primero el Client ID de Drive (⚙ Drive)', 'danger'); return; }
+    connectBtn.disabled = true; connectBtn.textContent = 'Conectando…';
+    try { await ensureDriveToken(clientId); toast('Drive conectado ✓ — ya puedes subir', 'ok'); }
+    catch (err) { toast('Error al conectar Drive: ' + err.message, 'danger'); }
+    finally { connectBtn.disabled = false; setConnLabel(); }
+  });
+
   // Documentos anti-lavado: solo para proveedores ya guardados (necesitan id).
   const docsSection = prov
     ? h('div', {}, [
-      h('h2', { style: { fontSize: '13px', margin: '14px 0 6px', color: 'var(--text-1)' } }, 'Documentos (PLD / anti-lavado)'),
+      h('div', { class: 'row', style: { margin: '14px 0 6px', alignItems: 'center' } }, [
+        h('h2', { style: { fontSize: '13px', margin: 0, color: 'var(--text-1)', flex: 1 } }, 'Documentos (PLD / anti-lavado)'),
+        clientId && connectBtn
+      ]),
       h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '4px' } },
         clientId
-          ? 'Se guardan en Drive: Proveedores SOGRUB / <clasificación> / <proveedor>. Deben ir a nombre del mismo RFC.'
+          ? 'Conecta Drive (una vez) y luego sube cada archivo. Se guardan en: Proveedores SOGRUB / <clasificación> / <proveedor>. Deben ir a nombre del mismo RFC.'
           : 'Configura el Client ID de Drive (⚙ Drive) para habilitar la subida.'),
       ...DOC_TIPOS.map(d => docRow(prov, d, () => clasificacion.value, clientId))
     ])

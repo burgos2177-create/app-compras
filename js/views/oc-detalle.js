@@ -1,17 +1,17 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711n';
-import { renderShell } from './shell.js?v=20260711n';
-import { state, setState } from '../state/store.js?v=20260711n';
+import { h, toast, modal } from '../util/dom.js?v=20260711o';
+import { renderShell } from './shell.js?v=20260711o';
+import { state, setState } from '../state/store.js?v=20260711o';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
   getOC, getBuzonItem, cancelarOC, updateOC,
   getFacturacion, setFacturacion,
   listProveedoresGlobal
-} from '../services/db.js?v=20260711n';
-import { navigate } from '../state/router.js?v=20260711n';
-import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260711n';
-import { estadoOCBadge } from './oc.js?v=20260711n';
-import { exportOcPdf, exportOcDoc, usoCfdiEfectivo } from '../services/oc-export.js?v=20260711n';
+} from '../services/db.js?v=20260711o';
+import { navigate } from '../state/router.js?v=20260711o';
+import { dateMx, num, num0, money, ocFolio, reqFolio } from '../util/format.js?v=20260711o';
+import { estadoOCBadge } from './oc.js?v=20260711o';
+import { exportOcPdf, exportOcDoc, usoCfdiEfectivo } from '../services/oc-export.js?v=20260711o';
 
 const ESTADOS_CANCELABLES = new Set(['borrador', 'enviada_buzon', 'aprobada', 'rechazada', 'huerfana']);
 

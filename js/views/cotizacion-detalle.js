@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711n';
-import { renderShell } from './shell.js?v=20260711n';
-import { state, setState } from '../state/store.js?v=20260711n';
+import { h, toast, modal } from '../util/dom.js?v=20260711o';
+import { renderShell } from './shell.js?v=20260711o';
+import { state, setState } from '../state/store.js?v=20260711o';
 import {
   getObraMetaLegacy,
   loadCatalogoConceptos, loadCatalogoMateriales,
@@ -11,13 +11,13 @@ import {
   pushBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq,
   buildPreciosPorProveedorObra
-} from '../services/db.js?v=20260711n';
-import { navigate } from '../state/router.js?v=20260711n';
-import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711n';
-import { deriveTotales } from '../services/totales.js?v=20260711n';
-import { emitirOC } from '../services/oc-emit.js?v=20260711n';
-import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711n';
-import { estadoCotBadge } from './cotizaciones.js?v=20260711n';
+} from '../services/db.js?v=20260711o';
+import { navigate } from '../state/router.js?v=20260711o';
+import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711o';
+import { deriveTotales } from '../services/totales.js?v=20260711o';
+import { emitirOC } from '../services/oc-emit.js?v=20260711o';
+import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711o';
+import { estadoCotBadge } from './cotizaciones.js?v=20260711o';
 
 // Captura/edita una cotización contra una requisición aprobada y emite la OC.
 //

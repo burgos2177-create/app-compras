@@ -1,6 +1,6 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711n';
-import { renderShell } from './shell.js?v=20260711n';
-import { state, setState } from '../state/store.js?v=20260711n';
+import { h, toast, modal } from '../util/dom.js?v=20260711o';
+import { renderShell } from './shell.js?v=20260711o';
+import { state, setState } from '../state/store.js?v=20260711o';
 import {
   getObraMetaLegacy, getSubcontrato, updateSubcontratoMeta,
   addSubcontratoConcepto, addSubcontratoConceptosBulk,
@@ -10,15 +10,15 @@ import {
   adjudicarSubcontrato, desadjudicarSubcontrato,
   loadCatalogoConceptos,
   listProveedoresObra, listProveedoresGlobal, mergeProveedorObraConGlobal
-} from '../services/db.js?v=20260711n';
-import { navigate } from '../state/router.js?v=20260711n';
-import { dateMx, num, num0, money } from '../util/format.js?v=20260711n';
-import { estadoSCBadge } from './subcontratos.js?v=20260711n';
+} from '../services/db.js?v=20260711o';
+import { navigate } from '../state/router.js?v=20260711o';
+import { dateMx, num, num0, money } from '../util/format.js?v=20260711o';
+import { estadoSCBadge } from './subcontratos.js?v=20260711o';
 import {
   exportLicitanteXlsxCompras, exportLicitantePdfCompras,
   parseLicitanteXlsxCompras,
   exportComparativaXlsxCompras, exportComparativaPdfCompras
-} from '../services/subcontrato-export.js?v=20260711n';
+} from '../services/subcontrato-export.js?v=20260711o';
 
 // Helpers tolerantes al shape del catálogo unificado.
 // El catálogo en /shared/catalogos/{obraId}/conceptos usa snake_case

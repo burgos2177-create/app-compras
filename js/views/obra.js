@@ -1,14 +1,14 @@
-import { h } from '../util/dom.js?v=20260711n';
-import { renderShell } from './shell.js?v=20260711n';
-import { state, setState } from '../state/store.js?v=20260711n';
+import { h } from '../util/dom.js?v=20260711o';
+import { renderShell } from './shell.js?v=20260711o';
+import { state, setState } from '../state/store.js?v=20260711o';
 import {
   getObraMetaLegacy, listBuzon, filtrarBuzon,
   listCotizaciones, listOC,
   loadCatalogoConceptos, loadCatalogoMateriales,
   listProveedoresObra, listSubcontratos
-} from '../services/db.js?v=20260711n';
-import { navigate } from '../state/router.js?v=20260711n';
-import { num0, money } from '../util/format.js?v=20260711n';
+} from '../services/db.js?v=20260711o';
+import { navigate } from '../state/router.js?v=20260711o';
+import { num0, money } from '../util/format.js?v=20260711o';
 
 export async function renderObra({ params }) {
   const obraId = params.id;

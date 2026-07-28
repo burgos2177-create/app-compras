@@ -130,6 +130,19 @@ export async function requestAccessTokenTest(clientId) {
   return getAccessToken(clientId, { forceInteractive: true });
 }
 
+// ¿Hay un token de Drive válido en cache? (para saber si la subida necesitará
+// abrir el popup o no).
+export function driveTokenValido() { return !!loadToken(); }
+
+// Conecta Drive: obtiene el token (popup si hace falta). DEBE llamarse desde un
+// clic de botón directo — el popup de Google solo abre bien así, no desde la
+// selección de archivo. Una vez conectado, las subidas usan el token cacheado
+// (~1h) sin volver a abrir popup.
+export async function ensureDriveToken(clientId) {
+  if (!clientId) throw new Error('Falta el Client ID de Google (⚙ Drive)');
+  return getAccessToken(clientId);
+}
+
 // Sube (o reemplaza con PATCH si hay prevFileId) un documento del proveedor.
 // Devuelve { url, fileId, name, folderId }.
 //
