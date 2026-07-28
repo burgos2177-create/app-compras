@@ -41,7 +41,18 @@ function saveToken(access_token, expires_in) {
 }
 function clearToken() { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } }
 
-// Pide un access_token con GIS. prompt '' = silencioso; 'select_account' = popup.
+// Mensaje amable para los errores típicos de GIS.
+function friendlyOauthError(type) {
+  if (type === 'popup_failed_to_open')
+    return 'El navegador bloqueó la ventana de Google. Permite las ventanas emergentes (popups) para este sitio y vuelve a intentar. No funciona dentro de Ferdium/Electron: usa Chrome o Edge.';
+  if (type === 'popup_closed')
+    return 'Cerraste la ventana de Google sin autorizar. Vuelve a intentar y elige la cuenta de proveedores.';
+  return type || 'OAuth cancelado';
+}
+
+// Pide un access_token con GIS. prompt 'select_account' = popup selector de cuenta.
+// IMPORTANTE: requestAccessToken DEBE llamarse de forma síncrona dentro del gesto
+// del usuario (clic / selección de archivo); si no, el navegador bloquea el popup.
 function requestToken(clientId, prompt) {
   return new Promise((resolve, reject) => {
     if (!gisReady()) return reject(new Error('Google Identity no cargó (revisa conexión / bloqueadores)'));
@@ -50,22 +61,24 @@ function requestToken(clientId, prompt) {
       scope: SCOPE,
       callback: (resp) => {
         if (resp && resp.access_token) { saveToken(resp.access_token, resp.expires_in); resolve(resp.access_token); }
-        else reject(new Error(resp?.error || 'sin token'));
+        else reject(new Error(friendlyOauthError(resp?.error)));
       },
-      error_callback: (err) => reject(new Error(err?.type || err?.message || 'OAuth cancelado'))
+      error_callback: (err) => reject(new Error(friendlyOauthError(err?.type || err?.message)))
     });
     try { client.requestAccessToken({ prompt }); }
     catch (err) { reject(err); }
   });
 }
 
-// Silencioso primero; si falla (sesión cerrada / requiere interacción), popup.
+// Devuelve un access_token. Si hay uno válido en cache (guardado ~1h) no abre
+// nada. Si no, hace UN SOLO requestAccessToken interactivo — sin un intento
+// silencioso con `await` previo, porque ese await consume el gesto del usuario y
+// el navegador bloquea el popup (popup_failed_to_open). Así el popup abre dentro
+// del mismo gesto (el clic/selección de archivo que dispara la subida).
 async function getAccessToken(clientId, { forceInteractive = false } = {}) {
   if (!forceInteractive) {
     const cached = loadToken();
     if (cached) return cached;
-    try { return await requestToken(clientId, ''); }
-    catch { /* cae a interactivo */ }
   }
   return requestToken(clientId, 'select_account');
 }
