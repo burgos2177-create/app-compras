@@ -1,4 +1,4 @@
-import { h, mount } from '../util/dom.js?v=20260711o';
+import { h, mount } from '../util/dom.js?v=20260803a';
 import { login } from '../services/auth.js?v=20260711o';
 
 export function renderLogin() {

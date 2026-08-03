@@ -1,4 +1,4 @@
-import { h } from '../util/dom.js?v=20260711o';
+import { h } from '../util/dom.js?v=20260803a';
 import { renderShell } from './shell.js?v=20260711o';
 import { state, setState } from '../state/store.js?v=20260711o';
 import {
