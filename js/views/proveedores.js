@@ -1,11 +1,11 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711o';
+import { h, toast, modal } from '../util/dom.js?v=20260803a';
 import { renderShell } from './shell.js?v=20260711o';
 import { state } from '../state/store.js?v=20260711o';
 import {
   listProveedoresGlobal, addProveedorGlobal,
   updateProveedorGlobal, deleteProveedorGlobal,
   getGoogleClientId, setGoogleClientId
-} from '../services/db.js?v=20260711o';
+} from '../services/db.js?v=20260803b';
 import { uploadProveedorDoc, gisReady, driveTokenValido, ensureDriveToken } from '../services/drive.js?v=20260711o';
 
 // Los navegadores envoltorio (Ferdium/Electron) no completan el popup de OAuth:

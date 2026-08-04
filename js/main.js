@@ -19,7 +19,7 @@ import { renderSolicitarCotizacion } from './views/solicitar-cotizacion.js?v=202
 import { renderCompraServicio } from './views/compra-servicio.js?v=20260711o';
 import { renderSubcontratos } from './views/subcontratos.js?v=20260711o';
 import { renderSubcontratoDetalle } from './views/subcontrato.js?v=20260711o';
-import { h, mount } from './util/dom.js?v=20260711o';
+import { h, mount } from './util/dom.js?v=20260803a';
 
 route('/',                                  () => renderObrasList());
 route('/admin',                             () => renderAdmin());

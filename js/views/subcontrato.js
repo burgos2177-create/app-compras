@@ -1,4 +1,4 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711o';
+import { h, toast, modal } from '../util/dom.js?v=20260803a';
 import { renderShell } from './shell.js?v=20260711o';
 import { state, setState } from '../state/store.js?v=20260711o';
 import {
@@ -10,7 +10,7 @@ import {
   adjudicarSubcontrato, desadjudicarSubcontrato,
   loadCatalogoConceptos,
   listProveedoresObra, listProveedoresGlobal, mergeProveedorObraConGlobal
-} from '../services/db.js?v=20260711o';
+} from '../services/db.js?v=20260803b';
 import { navigate } from '../state/router.js?v=20260711o';
 import { dateMx, num, num0, money } from '../util/format.js?v=20260711o';
 import { estadoSCBadge } from './subcontratos.js?v=20260711o';

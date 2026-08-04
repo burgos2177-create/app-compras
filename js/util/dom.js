@@ -39,13 +39,53 @@ export function toast(msg, kind = '') {
   setTimeout(() => t.remove(), 3100);
 }
 
+// Aviso antes de descartar un formulario a medio llenar. Se dibuja ENCIMA del
+// modal (no lo reemplaza) para que, si el usuario elige seguir editando,
+// encuentre todo exactamente como lo dejó.
+//
+// A propósito no se usa confirm() nativo: el navegador lo suprime tras varios
+// diálogos en la misma sesión y el aviso simplemente no aparecería.
+function confirmarDescartar(host, onDescartar, onSeguir) {
+  const seguir = h('button', { class: 'btn primary' }, 'Seguir editando');
+  const salir  = h('button', { class: 'btn danger' }, 'Descartar');
+  const capa = h('div', {
+    class: 'modal-descartar',
+    style: {
+      position: 'absolute', top: '0', right: '0', bottom: '0', left: '0',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'rgba(0,0,0,.6)', zIndex: '20', padding: '20px'
+    },
+    onClick: (e) => e.stopPropagation()   // clicks aquí no llegan al backdrop
+  }, h('div', { class: 'modal', style: { maxWidth: '400px' } }, [
+    h('h2', {}, '¿Descartar lo capturado?'),
+    h('p', { style: { lineHeight: '1.5', margin: '0' } },
+      'Si sales ahora se perderá la información que escribiste en este formulario.'),
+    h('div', { class: 'actions' }, [salir, seguir])
+  ]));
+  seguir.addEventListener('click', () => { capa.remove(); if (onSeguir) onSeguir(); });
+  salir.addEventListener('click',  () => { capa.remove(); onDescartar(); });
+  host.appendChild(capa);
+  seguir.focus();   // la opción segura es la que queda enfocada
+}
+
 // Soporta modales anidados: cada llamada agrega su propio backdrop como hijo
 // de #modal-root. Cerrar uno solo remueve su backdrop, no limpia los demás.
 export function modal({ title, body, onConfirm, confirmLabel = 'Aceptar', cancelLabel = 'Cancelar', danger = false, size = '' }) {
   return new Promise((resolve) => {
     const root = document.getElementById('modal-root');
     let backdrop;
+    let sucio = false;        // ¿el usuario ya capturó algo?
+    let preguntando = false;  // evita apilar avisos si sigue clickeando fuera
     const close = (val) => { if (backdrop) backdrop.remove(); resolve(val); };
+    // El click fuera del modal es la forma más común de perder un formulario
+    // por accidente. Si ya hay captura, preguntar antes de descartarla; si el
+    // formulario sigue intacto, cerrar sin fricción.
+    const pedirCierre = () => {
+      if (!sucio) return close(false);
+      if (preguntando) return;
+      preguntando = true;
+      confirmarDescartar(backdrop, () => close(false), () => { preguntando = false; });
+    };
     const card = h('div', { class: 'modal' + (size ? ' ' + size : '') }, [
       h('h2', {}, title),
       typeof body === 'string' ? h('div', {}, body) : body,
@@ -54,7 +94,12 @@ export function modal({ title, body, onConfirm, confirmLabel = 'Aceptar', cancel
         h('button', { class: `btn ${danger ? 'danger' : 'primary'}`, onClick: async () => { const r = onConfirm ? await onConfirm() : true; close(r); } }, confirmLabel)
       ])
     ]);
-    backdrop = h('div', { class: 'modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) close(false); } }, card);
+    // Sólo la interacción real ensucia el formulario: asignar .value por código
+    // no dispara input/change, así que ni los valores precargados ni el
+    // contenido que llega async cuentan como captura del usuario.
+    card.addEventListener('input',  () => { sucio = true; });
+    card.addEventListener('change', () => { sucio = true; });
+    backdrop = h('div', { class: 'modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) pedirCierre(); } }, card);
     root.appendChild(backdrop);
   });
 }

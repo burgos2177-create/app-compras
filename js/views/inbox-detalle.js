@@ -1,4 +1,4 @@
-import { h, toast, modal } from '../util/dom.js?v=20260711o';
+import { h, toast, modal } from '../util/dom.js?v=20260803a';
 import { renderShell } from './shell.js?v=20260711o';
 import { state, setState } from '../state/store.js?v=20260711o';
 import {
@@ -8,7 +8,7 @@ import {
   listOC, listCotizaciones, calcularCoberturaReq,
   buildPreciosPorProveedorObra, analizarReqVsProveedores,
   aplicarReemplazosRequisicion
-} from '../services/db.js?v=20260711o';
+} from '../services/db.js?v=20260803b';
 import { emitirOC } from '../services/oc-emit.js?v=20260711o';
 import { navigate } from '../state/router.js?v=20260711o';
 import { dateMx, num, num0, money, reqFolio } from '../util/format.js?v=20260711o';
