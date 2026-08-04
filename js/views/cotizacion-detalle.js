@@ -11,7 +11,7 @@ import {
   pushBuzonItem, setRequisicionOcRef,
   calcularCoberturaReq,
   buildPreciosPorProveedorObra
-} from '../services/db.js?v=20260711o';
+} from '../services/db.js?v=20260803b';
 import { navigate } from '../state/router.js?v=20260711o';
 import { dateMx, num, num0, money, reqFolio, ocFolio } from '../util/format.js?v=20260711o';
 import { deriveTotales } from '../services/totales.js?v=20260711o';

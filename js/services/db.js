@@ -224,6 +224,32 @@ export async function getProyectoIdByObraId(obraId) {
   return await rread(`/shared/obraLinks/${obraId}`);
 }
 
+// Estado operativo de cada obra ('activo' | 'pausa' | 'terminado').
+//
+// Aquí NO se guarda estado: la fuente única es el proyecto contable de
+// bitácora, que se administra desde la consola de la suite. Se resuelve
+// obra → proyecto con /shared/obraLinks y de ahí se lee `estado`.
+//
+// Devuelve { [obraId]: estado }. Una obra sin vínculo o cuyo proyecto no
+// tenga estado simplemente NO aparece en el mapa: el llamador debe tratar
+// la ausencia como "activa" para no esconder obras recién creadas.
+export async function getEstadoObras() {
+  const [links, proyectosRaw] = await Promise.all([
+    rread('/shared/obraLinks'),
+    rread('/legacy/bitacora/sogrub_proyectos')   // bitácora los guarda como array
+  ]);
+  const proyectos = !proyectosRaw ? []
+    : (Array.isArray(proyectosRaw) ? proyectosRaw : Object.values(proyectosRaw));
+  const porId = {};
+  proyectos.forEach(p => { if (p && p.id != null) porId[String(p.id)] = p; });
+  const out = {};
+  for (const [obraId, proyectoId] of Object.entries(links || {})) {
+    const estado = porId[String(proyectoId)]?.estado;
+    if (estado) out[obraId] = estado;
+  }
+  return out;
+}
+
 export async function listProveedoresProy(proyectoId) {
   const all = await rread('/legacy/bitacora/sogrub_proy_proveedores');
   if (!Array.isArray(all)) return [];

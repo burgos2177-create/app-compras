@@ -9,7 +9,7 @@ import {
   listSolicitudesCotizacion, getSolicitudCotizacion,
   createSolicitudCotizacion, updateSolicitudCotizacion,
   deleteSolicitudCotizacion
-} from '../services/db.js?v=20260711o';
+} from '../services/db.js?v=20260803b';
 import { navigate } from '../state/router.js?v=20260711o';
 import { dateMx, num0 } from '../util/format.js?v=20260711o';
 import { abrirSolicitudPDF } from '../services/solicitud-pdf.js?v=20260711o';

@@ -5,7 +5,7 @@ import {
   listProveedoresGlobal, addProveedorGlobal,
   updateProveedorGlobal, deleteProveedorGlobal,
   getGoogleClientId, setGoogleClientId
-} from '../services/db.js?v=20260711o';
+} from '../services/db.js?v=20260803b';
 import { uploadProveedorDoc, gisReady, driveTokenValido, ensureDriveToken } from '../services/drive.js?v=20260711o';
 
 // Los navegadores envoltorio (Ferdium/Electron) no completan el popup de OAuth:
